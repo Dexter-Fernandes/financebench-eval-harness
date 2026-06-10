@@ -216,3 +216,32 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project local data and evaluation artefacts
+data/
+documents/
+pdfs/
+*.pdf
+vector_store/
+vectorstores/
+chroma/
+.chroma/
+faiss_index/
+*.faiss
+*.index
+runs/
+outputs/
+artifacts/
+reports/generated/
+model_cache/
+models/
+.ollama/
+
+# Project secrets
+.env.*
+!.env.example
+secrets/
+*.key
+*.pem
+*.sqlite
+*.duckdb
