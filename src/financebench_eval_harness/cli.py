@@ -15,6 +15,7 @@ from financebench_eval_harness.data import (
     FinanceBenchQuestionLoadError,
     MissingFinanceBenchDataError,
     load_financebench_examples,
+    validate_financebench_dataset,
     validate_financebench_data_layout,
 )
 
@@ -43,6 +44,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory containing questions.jsonl and documents/.",
     )
 
+    dataset_parser = subparsers.add_parser(
+        "validate-dataset",
+        help="Validate the FinanceBench question schema.",
+    )
+    _add_dataset_path_arguments(dataset_parser)
+
     return parser
 
 
@@ -67,8 +74,42 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Loaded {len(examples)} FinanceBench examples.")
         return 0
 
+    if args.command == "validate-dataset":
+        try:
+            dataset_config = _resolve_dataset_config(args.config, args.data_root)
+            result = validate_financebench_dataset(dataset_config)
+        except (DatasetConfigError, FinanceBenchQuestionLoadError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        print(f"Valid examples: {result.valid_count}")
+        print(f"Invalid examples: {result.invalid_count}")
+        if result.invalid_count:
+            print("Dataset schema validation failed.")
+            for issue in result.issues:
+                print(issue.format())
+            return 1
+
+        print("Dataset schema validation passed.")
+        return 0
+
     parser.error(f"Unknown command: {args.command}")
     return 2
+
+
+def _add_dataset_path_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_DATASET_CONFIG_PATH,
+        help="Dataset config YAML path.",
+    )
+    parser.add_argument(
+        "--data-root",
+        type=Path,
+        default=None,
+        help="Directory containing questions.jsonl and documents/.",
+    )
 
 
 def _resolve_dataset_config(config_path: Path, data_root: Path | None) -> DatasetConfig:

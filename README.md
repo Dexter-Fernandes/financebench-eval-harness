@@ -54,3 +54,9 @@ Use `--data-root PATH` if the FinanceBench files live somewhere else:
 ```bash
 financebench-harness validate-data --data-root /path/to/financebench
 ```
+
+To validate the question schema and check for duplicate question IDs, run:
+
+```bash
+financebench-harness validate-dataset
+```

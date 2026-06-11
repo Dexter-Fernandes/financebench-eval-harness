@@ -8,6 +8,7 @@ from financebench_eval_harness.data import (
     FinanceBenchQuestionLoadError,
     MissingFinanceBenchDataError,
     load_financebench_examples,
+    validate_financebench_dataset,
     validate_financebench_data_layout,
 )
 
@@ -150,6 +151,105 @@ def test_load_financebench_examples_reports_missing_evidence_metadata(
     message = str(exc_info.value)
     assert "line 1" in message
     assert "evidence[1].evidence_page_num" in message
+
+
+def test_validate_financebench_dataset_counts_valid_examples(tmp_path: Path) -> None:
+    config = _dataset_config(tmp_path)
+    _write_questions(
+        config.questions_path,
+        [
+            _question_row(question_id="financebench_id_1"),
+            _question_row(question_id="financebench_id_2"),
+        ],
+    )
+
+    result = validate_financebench_dataset(config)
+
+    assert result.valid_count == 2
+    assert result.invalid_count == 0
+    assert result.issues == ()
+
+
+def test_validate_financebench_dataset_reports_missing_required_fields(
+    tmp_path: Path,
+) -> None:
+    config = _dataset_config(tmp_path)
+    missing_question = _question_row(question_id="financebench_id_1")
+    missing_question["question"] = ""
+    missing_answer = _question_row(question_id="financebench_id_2")
+    del missing_answer["answer"]
+    missing_evidence = _question_row(question_id="financebench_id_3")
+    missing_evidence["evidence"] = []
+    _write_questions(config.questions_path, [missing_question, missing_answer, missing_evidence])
+
+    result = validate_financebench_dataset(config)
+
+    assert result.valid_count == 0
+    assert result.invalid_count == 3
+    assert [issue.line_number for issue in result.issues] == [1, 2, 3]
+    assert [issue.field for issue in result.issues] == ["question", "answer", "evidence"]
+
+
+def test_validate_financebench_dataset_reports_missing_evidence_metadata(
+    tmp_path: Path,
+) -> None:
+    config = _dataset_config(tmp_path)
+    row = _question_row(
+        evidence=[
+            {
+                "doc_name": "",
+                "evidence_page_num": "12",
+                "evidence_text": "Revenue was $123.",
+            }
+        ]
+    )
+    _write_questions(config.questions_path, [row])
+
+    result = validate_financebench_dataset(config)
+
+    assert result.valid_count == 0
+    assert result.invalid_count == 1
+    assert result.issues[0].line_number == 1
+    assert result.issues[0].field == "evidence[1].doc_name"
+    assert "missing or empty" in result.issues[0].message
+
+
+def test_validate_financebench_dataset_detects_duplicate_question_ids(
+    tmp_path: Path,
+) -> None:
+    config = _dataset_config(tmp_path)
+    _write_questions(
+        config.questions_path,
+        [
+            _question_row(question_id="financebench_id_1"),
+            _question_row(question_id="financebench_id_1"),
+        ],
+    )
+
+    result = validate_financebench_dataset(config)
+
+    assert result.valid_count == 1
+    assert result.invalid_count == 1
+    assert result.issues[0].line_number == 2
+    assert result.issues[0].question_id == "financebench_id_1"
+    assert result.issues[0].field == "financebench_id"
+    assert result.issues[0].message == "duplicate question_id"
+
+
+def test_validate_financebench_dataset_reports_malformed_json(
+    tmp_path: Path,
+) -> None:
+    config = _dataset_config(tmp_path)
+    config.questions_path.parent.mkdir(parents=True)
+    config.questions_path.write_text("{not json}\n", encoding="utf-8")
+
+    result = validate_financebench_dataset(config)
+
+    assert result.valid_count == 0
+    assert result.invalid_count == 1
+    assert result.issues[0].line_number == 1
+    assert result.issues[0].field == "json"
+    assert result.issues[0].question_id is None
 
 
 def test_validate_financebench_data_layout_accepts_dataset_config(tmp_path: Path) -> None:

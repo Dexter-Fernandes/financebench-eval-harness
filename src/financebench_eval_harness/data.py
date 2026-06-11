@@ -62,6 +62,29 @@ class FinanceBenchExample:
     evidence: tuple[FinanceBenchEvidence, ...]
 
 
+@dataclass(frozen=True)
+class DatasetValidationIssue:
+    """One schema validation issue found in a FinanceBench dataset."""
+
+    line_number: int
+    question_id: str | None
+    field: str
+    message: str
+
+    def format(self) -> str:
+        question_id = self.question_id or "unknown"
+        return f"line {self.line_number} [{question_id}] {self.message}"
+
+
+@dataclass(frozen=True)
+class DatasetValidationResult:
+    """Aggregate schema validation result for a FinanceBench dataset."""
+
+    valid_count: int
+    invalid_count: int
+    issues: tuple[DatasetValidationIssue, ...]
+
+
 class MissingFinanceBenchDataError(FileNotFoundError):
     """Raised when the expected local FinanceBench data layout is missing."""
 
@@ -139,6 +162,63 @@ def load_financebench_examples(
     return examples
 
 
+def validate_financebench_dataset(
+    dataset_config_or_path: DatasetConfig | str | Path | None = None,
+) -> DatasetValidationResult:
+    """Validate configured FinanceBench question records without raising per-row errors."""
+
+    config = _resolve_dataset_config(dataset_config_or_path)
+    questions_path = config.questions_path
+
+    if not questions_path.is_file():
+        raise FinanceBenchQuestionLoadError(
+            f"FinanceBench questions file not found: {questions_path}"
+        )
+
+    valid_count = 0
+    invalid_count = 0
+    issues: list[DatasetValidationIssue] = []
+    seen_question_ids: set[str] = set()
+
+    try:
+        with questions_path.open(encoding="utf-8") as questions_file:
+            for line_number, line in enumerate(questions_file, start=1):
+                if not line.strip():
+                    continue
+
+                try:
+                    example = _parse_financebench_example(line, line_number)
+                except FinanceBenchQuestionLoadError as exc:
+                    invalid_count += 1
+                    issues.append(_issue_from_load_error(line, line_number, exc))
+                    continue
+
+                if example.question_id in seen_question_ids:
+                    invalid_count += 1
+                    issues.append(
+                        DatasetValidationIssue(
+                            line_number=line_number,
+                            question_id=example.question_id,
+                            field="financebench_id",
+                            message="duplicate question_id",
+                        )
+                    )
+                    continue
+
+                seen_question_ids.add(example.question_id)
+                valid_count += 1
+    except OSError as exc:
+        raise FinanceBenchQuestionLoadError(
+            f"Could not read FinanceBench questions file: {questions_path}"
+        ) from exc
+
+    return DatasetValidationResult(
+        valid_count=valid_count,
+        invalid_count=invalid_count,
+        issues=tuple(issues),
+    )
+
+
 def _resolve_dataset_config(
     dataset_config_or_path: DatasetConfig | str | Path | None,
 ) -> DatasetConfig:
@@ -147,6 +227,54 @@ def _resolve_dataset_config(
     if isinstance(dataset_config_or_path, DatasetConfig):
         return dataset_config_or_path
     return load_dataset_config(dataset_config_or_path)
+
+
+def _issue_from_load_error(
+    line: str,
+    line_number: int,
+    exc: FinanceBenchQuestionLoadError,
+) -> DatasetValidationIssue:
+    return DatasetValidationIssue(
+        line_number=line_number,
+        question_id=_question_id_from_line(line),
+        field=_field_from_error_message(str(exc)),
+        message=_message_from_error(str(exc), line_number),
+    )
+
+
+def _question_id_from_line(line: str) -> str | None:
+    try:
+        row = json.loads(line)
+    except JSONDecodeError:
+        return None
+
+    if not isinstance(row, dict):
+        return None
+
+    question_id = row.get("financebench_id")
+    if not isinstance(question_id, str) or not question_id.strip():
+        return None
+    return question_id
+
+
+def _field_from_error_message(message: str) -> str:
+    if "'" in message:
+        return message.split("'", maxsplit=2)[1]
+    if "JSONL" in message:
+        return "json"
+    return "row"
+
+
+def _message_from_error(message: str, line_number: int) -> str:
+    prefix = f"Invalid FinanceBench row at line {line_number}: "
+    if message.startswith(prefix):
+        return message.removeprefix(prefix)
+
+    json_prefix = f"Invalid FinanceBench JSONL at line {line_number}: "
+    if message.startswith(json_prefix):
+        return message.removeprefix(json_prefix)
+
+    return message
 
 
 def _parse_financebench_example(line: str, line_number: int) -> FinanceBenchExample:
