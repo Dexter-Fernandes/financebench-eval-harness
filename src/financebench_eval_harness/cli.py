@@ -5,8 +5,13 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+from financebench_eval_harness.config import (
+    DEFAULT_DATASET_CONFIG_PATH,
+    DatasetConfig,
+    DatasetConfigError,
+    load_dataset_config,
+)
 from financebench_eval_harness.data import (
-    DEFAULT_DATA_ROOT,
     MissingFinanceBenchDataError,
     validate_financebench_data_layout,
 )
@@ -24,9 +29,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Validate the expected local FinanceBench data layout.",
     )
     validate_parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_DATASET_CONFIG_PATH,
+        help="Dataset config YAML path.",
+    )
+    validate_parser.add_argument(
         "--data-root",
         type=Path,
-        default=DEFAULT_DATA_ROOT,
+        default=None,
         help="Directory containing questions.jsonl and documents/.",
     )
 
@@ -39,8 +50,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "validate-data":
         try:
-            layout = validate_financebench_data_layout(args.data_root)
-        except MissingFinanceBenchDataError as exc:
+            dataset_config = _resolve_dataset_config(args.config, args.data_root)
+            layout = validate_financebench_data_layout(dataset_config)
+        except (DatasetConfigError, MissingFinanceBenchDataError) as exc:
             print(str(exc), file=sys.stderr)
             return 1
 
@@ -49,6 +61,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser.error(f"Unknown command: {args.command}")
     return 2
+
+
+def _resolve_dataset_config(config_path: Path, data_root: Path | None) -> DatasetConfig:
+    if data_root is not None:
+        return DatasetConfig.from_data_root(data_root)
+    return load_dataset_config(config_path)
 
 
 if __name__ == "__main__":

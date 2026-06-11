@@ -33,6 +33,22 @@ After placing the files, run:
 financebench-harness validate-data
 ```
 
+By default this reads `configs/datasets/financebench.yaml`:
+
+```yaml
+dataset:
+  name: financebench
+  questions_path: data/raw/financebench/questions.jsonl
+  documents_dir: data/raw/financebench/documents
+  processed_dir: data/processed/financebench
+```
+
+Use `--config PATH` to point at a different dataset config:
+
+```bash
+financebench-harness validate-data --config /path/to/dataset.yaml
+```
+
 Use `--data-root PATH` if the FinanceBench files live somewhere else:
 
 ```bash

@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from financebench_eval_harness.config import DatasetConfig
 from financebench_eval_harness.data import (
     MissingFinanceBenchDataError,
     validate_financebench_data_layout,
@@ -19,6 +20,25 @@ def test_validate_financebench_data_layout_accepts_expected_files(tmp_path: Path
     assert layout.root == data_root
     assert layout.questions_path == data_root / "questions.jsonl"
     assert layout.documents_path == documents
+
+
+def test_validate_financebench_data_layout_accepts_dataset_config(tmp_path: Path) -> None:
+    data_root = tmp_path / "financebench"
+    documents = data_root / "documents"
+    documents.mkdir(parents=True)
+    (data_root / "questions.jsonl").write_text("{}", encoding="utf-8")
+    config = DatasetConfig(
+        name="financebench",
+        questions_path=data_root / "questions.jsonl",
+        documents_dir=documents,
+        processed_dir=tmp_path / "processed",
+    )
+
+    layout = validate_financebench_data_layout(config)
+
+    assert layout.questions_path == config.questions_path
+    assert layout.documents_path == config.documents_dir
+    assert layout.processed_dir == config.processed_dir
 
 
 def test_validate_financebench_data_layout_reports_missing_questions(tmp_path: Path) -> None:

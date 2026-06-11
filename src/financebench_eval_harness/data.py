@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from financebench_eval_harness.config import DatasetConfig
+
 
 DEFAULT_DATA_ROOT = Path("data/raw/financebench")
 QUESTIONS_FILENAME = "questions.jsonl"
@@ -13,22 +15,26 @@ DOCUMENTS_DIRNAME = "documents"
 class FinanceBenchDataLayout:
     """Expected local FinanceBench data paths."""
 
-    root: Path = DEFAULT_DATA_ROOT
+    config: DatasetConfig
 
     @property
     def questions_path(self) -> Path:
-        return self.root / QUESTIONS_FILENAME
+        return self.config.questions_path
 
     @property
     def documents_path(self) -> Path:
-        return self.root / DOCUMENTS_DIRNAME
+        return self.config.documents_dir
+
+    @property
+    def processed_dir(self) -> Path:
+        return self.config.processed_dir
+
+    @property
+    def root(self) -> Path:
+        return self.questions_path.parent
 
     def expected_layout_message(self) -> str:
-        return (
-            "Expected:\n"
-            f"  {self.questions_path}\n"
-            f"  {self.documents_path}/"
-        )
+        return self.config.expected_layout_message()
 
 
 class MissingFinanceBenchDataError(FileNotFoundError):
@@ -44,23 +50,31 @@ class MissingFinanceBenchDataError(FileNotFoundError):
             "Missing:\n"
             f"{missing}\n\n"
             "Place the public FinanceBench sample question file at questions.jsonl "
-            "and source documents under documents/, or pass --data-root PATH."
+            "and source documents under documents/, or pass --config PATH or "
+            "--data-root PATH."
         )
 
 
 def validate_financebench_data_layout(
-    data_root: str | Path = DEFAULT_DATA_ROOT,
+    dataset_config: DatasetConfig | str | Path | None = None,
 ) -> FinanceBenchDataLayout:
     """Validate the expected local FinanceBench dataset layout."""
 
-    layout = FinanceBenchDataLayout(Path(data_root))
+    if dataset_config is None:
+        config = DatasetConfig.from_data_root(DEFAULT_DATA_ROOT)
+    elif isinstance(dataset_config, DatasetConfig):
+        config = dataset_config
+    else:
+        config = DatasetConfig.from_data_root(dataset_config)
+
+    layout = FinanceBenchDataLayout(config)
     missing_paths: list[Path] = []
 
-    if not layout.questions_path.is_file():
-        missing_paths.append(layout.questions_path)
+    if not config.questions_path.is_file():
+        missing_paths.append(config.questions_path)
 
-    if not layout.documents_path.is_dir():
-        missing_paths.append(layout.documents_path)
+    if not config.documents_dir.is_dir():
+        missing_paths.append(config.documents_dir)
 
     if missing_paths:
         raise MissingFinanceBenchDataError(layout, missing_paths)
