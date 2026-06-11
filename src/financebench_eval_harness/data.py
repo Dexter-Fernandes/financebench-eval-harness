@@ -85,6 +85,20 @@ class DatasetValidationResult:
     issues: tuple[DatasetValidationIssue, ...]
 
 
+@dataclass(frozen=True)
+class DocumentRegistryValidationResult:
+    """Document registry coverage for FinanceBench evidence documents."""
+
+    registry: dict[str, Path]
+    resolved_documents: dict[str, Path]
+    missing_documents: tuple[str, ...]
+    unused_documents: tuple[str, ...]
+
+    @property
+    def is_valid(self) -> bool:
+        return not self.missing_documents
+
+
 class MissingFinanceBenchDataError(FileNotFoundError):
     """Raised when the expected local FinanceBench data layout is missing."""
 
@@ -219,6 +233,59 @@ def validate_financebench_dataset(
     )
 
 
+def build_document_registry(
+    dataset_config_or_path: DatasetConfig | str | Path | None = None,
+) -> dict[str, Path]:
+    """Map local document filenames to their paths."""
+
+    config = _resolve_dataset_config(dataset_config_or_path)
+    documents_dir = config.documents_dir
+
+    if not documents_dir.is_dir():
+        raise FinanceBenchQuestionLoadError(
+            f"FinanceBench documents directory not found: {documents_dir}"
+        )
+
+    return {
+        path.name: path
+        for path in sorted(documents_dir.iterdir())
+        if path.is_file()
+    }
+
+
+def validate_financebench_document_registry(
+    dataset_config_or_path: DatasetConfig | str | Path | None = None,
+) -> DocumentRegistryValidationResult:
+    """Validate evidence document references against local document files."""
+
+    config = _resolve_dataset_config(dataset_config_or_path)
+    examples = load_financebench_examples(config)
+    registry = build_document_registry(config)
+    required_filenames = {
+        _document_filename(evidence.doc_name)
+        for example in examples
+        for evidence in example.evidence
+    }
+    missing_documents = tuple(
+        sorted(filename for filename in required_filenames if filename not in registry)
+    )
+    unused_documents = tuple(
+        sorted(filename for filename in registry if filename not in required_filenames)
+    )
+    resolved_documents = {
+        filename: registry[filename]
+        for filename in sorted(required_filenames)
+        if filename in registry
+    }
+
+    return DocumentRegistryValidationResult(
+        registry=registry,
+        resolved_documents=resolved_documents,
+        missing_documents=missing_documents,
+        unused_documents=unused_documents,
+    )
+
+
 def _resolve_dataset_config(
     dataset_config_or_path: DatasetConfig | str | Path | None,
 ) -> DatasetConfig:
@@ -227,6 +294,12 @@ def _resolve_dataset_config(
     if isinstance(dataset_config_or_path, DatasetConfig):
         return dataset_config_or_path
     return load_dataset_config(dataset_config_or_path)
+
+
+def _document_filename(doc_name: str) -> str:
+    if doc_name.endswith(".pdf"):
+        return doc_name
+    return f"{doc_name}.pdf"
 
 
 def _issue_from_load_error(

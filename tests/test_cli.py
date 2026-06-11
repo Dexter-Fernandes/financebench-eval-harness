@@ -254,6 +254,63 @@ def test_validate_dataset_command_supports_default_config_path(
     assert "Dataset schema validation passed." in captured.out
 
 
+def test_validate_documents_command_succeeds_when_all_docs_resolve(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    data_root = tmp_path / "financebench"
+    (data_root / "documents").mkdir(parents=True)
+    (data_root / "documents" / "ACME_2022_10K.pdf").write_text("pdf", encoding="utf-8")
+    _write_valid_questions(data_root / "questions.jsonl")
+
+    exit_code = main(["validate-documents", "--data-root", str(data_root)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Resolved documents: 1" in captured.out
+    assert "Missing documents: 0" in captured.out
+    assert "Unused documents: 0" in captured.out
+    assert "Document registry validation passed." in captured.out
+
+
+def test_validate_documents_command_lists_missing_docs(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    data_root = tmp_path / "financebench"
+    (data_root / "documents").mkdir(parents=True)
+    _write_valid_questions(data_root / "questions.jsonl")
+
+    exit_code = main(["validate-documents", "--data-root", str(data_root)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "Resolved documents: 0" in captured.out
+    assert "Missing documents: 1" in captured.out
+    assert "Document registry validation failed." in captured.out
+    assert "missing ACME_2022_10K.pdf" in captured.out
+
+
+def test_validate_documents_command_warns_about_unused_docs(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    data_root = tmp_path / "financebench"
+    documents = data_root / "documents"
+    documents.mkdir(parents=True)
+    (documents / "ACME_2022_10K.pdf").write_text("pdf", encoding="utf-8")
+    (documents / "UNUSED_2022_10K.pdf").write_text("pdf", encoding="utf-8")
+    _write_valid_questions(data_root / "questions.jsonl")
+
+    exit_code = main(["validate-documents", "--data-root", str(data_root)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Unused documents: 1" in captured.out
+    assert "unused UNUSED_2022_10K.pdf" in captured.out
+    assert "Document registry validation passed." in captured.out
+
+
 def _write_valid_questions(path: Path) -> None:
     path.write_text(
         json.dumps(_question_row("financebench_id_1"))

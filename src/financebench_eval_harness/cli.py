@@ -15,6 +15,7 @@ from financebench_eval_harness.data import (
     FinanceBenchQuestionLoadError,
     MissingFinanceBenchDataError,
     load_financebench_examples,
+    validate_financebench_document_registry,
     validate_financebench_dataset,
     validate_financebench_data_layout,
 )
@@ -49,6 +50,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Validate the FinanceBench question schema.",
     )
     _add_dataset_path_arguments(dataset_parser)
+
+    documents_parser = subparsers.add_parser(
+        "validate-documents",
+        help="Validate FinanceBench evidence document file coverage.",
+    )
+    _add_dataset_path_arguments(documents_parser)
 
     return parser
 
@@ -91,6 +98,32 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
 
         print("Dataset schema validation passed.")
+        return 0
+
+    if args.command == "validate-documents":
+        try:
+            dataset_config = _resolve_dataset_config(args.config, args.data_root)
+            result = validate_financebench_document_registry(dataset_config)
+        except (DatasetConfigError, FinanceBenchQuestionLoadError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        print(f"Resolved documents: {len(result.resolved_documents)}")
+        print(f"Missing documents: {len(result.missing_documents)}")
+        print(f"Unused documents: {len(result.unused_documents)}")
+
+        if result.missing_documents:
+            print("Document registry validation failed.")
+            for filename in result.missing_documents:
+                print(f"missing {filename}")
+            return 1
+
+        if result.unused_documents:
+            print("Unused local documents:")
+            for filename in result.unused_documents:
+                print(f"unused {filename}")
+
+        print("Document registry validation passed.")
         return 0
 
     parser.error(f"Unknown command: {args.command}")

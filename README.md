@@ -60,3 +60,9 @@ To validate the question schema and check for duplicate question IDs, run:
 ```bash
 financebench-harness validate-dataset
 ```
+
+To check that evidence document names resolve to local files, run:
+
+```bash
+financebench-harness validate-documents
+```

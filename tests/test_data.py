@@ -7,7 +7,9 @@ from financebench_eval_harness.config import DatasetConfig
 from financebench_eval_harness.data import (
     FinanceBenchQuestionLoadError,
     MissingFinanceBenchDataError,
+    build_document_registry,
     load_financebench_examples,
+    validate_financebench_document_registry,
     validate_financebench_dataset,
     validate_financebench_data_layout,
 )
@@ -252,6 +254,66 @@ def test_validate_financebench_dataset_reports_malformed_json(
     assert result.issues[0].question_id is None
 
 
+def test_build_document_registry_maps_filenames_to_paths(tmp_path: Path) -> None:
+    config = _dataset_config(tmp_path)
+    config.documents_dir.mkdir(parents=True)
+    document_path = config.documents_dir / "ACME_2022_10K.pdf"
+    document_path.write_text("pdf", encoding="utf-8")
+
+    registry = build_document_registry(config)
+
+    assert registry == {"ACME_2022_10K.pdf": document_path}
+
+
+def test_validate_financebench_document_registry_resolves_evidence_docs(
+    tmp_path: Path,
+) -> None:
+    config = _dataset_config(tmp_path)
+    config.documents_dir.mkdir(parents=True)
+    document_path = config.documents_dir / "ACME_2022_10K.pdf"
+    document_path.write_text("pdf", encoding="utf-8")
+    _write_questions(config.questions_path, [_question_row()])
+
+    result = validate_financebench_document_registry(config)
+
+    assert result.is_valid
+    assert result.resolved_documents == {"ACME_2022_10K.pdf": document_path}
+    assert result.missing_documents == ()
+    assert result.unused_documents == ()
+
+
+def test_validate_financebench_document_registry_lists_missing_docs(
+    tmp_path: Path,
+) -> None:
+    config = _dataset_config(tmp_path)
+    config.documents_dir.mkdir(parents=True)
+    _write_questions(config.questions_path, [_question_row()])
+
+    result = validate_financebench_document_registry(config)
+
+    assert not result.is_valid
+    assert result.resolved_documents == {}
+    assert result.missing_documents == ("ACME_2022_10K.pdf",)
+
+
+def test_validate_financebench_document_registry_warns_about_unused_docs(
+    tmp_path: Path,
+) -> None:
+    config = _dataset_config(tmp_path)
+    config.documents_dir.mkdir(parents=True)
+    used_path = config.documents_dir / "ACME_2022_10K.pdf"
+    unused_path = config.documents_dir / "UNUSED_2022_10K.pdf"
+    used_path.write_text("pdf", encoding="utf-8")
+    unused_path.write_text("pdf", encoding="utf-8")
+    _write_questions(config.questions_path, [_question_row()])
+
+    result = validate_financebench_document_registry(config)
+
+    assert result.is_valid
+    assert result.resolved_documents == {"ACME_2022_10K.pdf": used_path}
+    assert result.unused_documents == ("UNUSED_2022_10K.pdf",)
+
+
 def test_validate_financebench_data_layout_accepts_dataset_config(tmp_path: Path) -> None:
     data_root = tmp_path / "financebench"
     documents = data_root / "documents"
@@ -311,7 +373,7 @@ def _dataset_config(tmp_path: Path) -> DatasetConfig:
 
 
 def _write_questions(path: Path, rows: list[dict]) -> None:
-    path.parent.mkdir(parents=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         "\n".join(json.dumps(row) for row in rows) + "\n",
         encoding="utf-8",
