@@ -32,6 +32,7 @@ def test_run_evaluation_with_mock_llm_writes_config_snapshot_and_outputs(
     assert result.output_dir == tmp_path / "runs" / "fixed-run"
     assert result.config_path == result.output_dir / "config.yaml"
     assert result.outputs_path == result.output_dir / "outputs.jsonl"
+    assert result.run_metadata_path == result.output_dir / "run_metadata.json"
     assert result.example_count == 2
     assert result.attempted_count == 2
     assert result.success_count == 2
@@ -56,17 +57,42 @@ def test_run_evaluation_with_mock_llm_writes_config_snapshot_and_outputs(
 
     rows = _read_jsonl(result.outputs_path)
     assert [row["question_id"] for row in rows] == ["q0", "q1"]
-    assert [row["response"] for row in rows] == ["answer 1", "answer 2"]
+    assert [row["question"] for row in rows] == ["Question 0?", "Question 1?"]
+    assert [row["prediction"] for row in rows] == ["answer 1", "answer 2"]
     assert [row["status"] for row in rows] == ["success", "success"]
     assert [row["error"] for row in rows] == [None, None]
+    assert "response" not in rows[0]
     assert rows[0]["mode"] == "closed_book"
     assert rows[0]["prompt_id"] == "closed_book_v1"
     assert rows[0]["prompt_version"] == "v1"
     assert rows[0]["model_provider"] == "mock"
     assert rows[0]["model_name"] == "mock-model"
+    assert isinstance(rows[0]["latency_ms"], int)
+    assert rows[0]["latency_ms"] >= 0
+    assert rows[0]["input_tokens"] is None
+    assert rows[0]["output_tokens"] is None
     assert "Question 0?" in rows[0]["prompt"]
     assert rows[0]["gold_answer"] == "Gold answer 0"
     assert llm_client.calls == [rows[0]["prompt"], rows[1]["prompt"]]
+
+    run_metadata = json.loads(result.run_metadata_path.read_text(encoding="utf-8"))
+    assert run_metadata["run_id"] == "fixed-run"
+    assert run_metadata["output_dir"] == str(result.output_dir)
+    assert run_metadata["dataset_path"] == str(dataset_path)
+    assert run_metadata["mode"] == "closed_book"
+    assert run_metadata["limit"] == 2
+    assert run_metadata["model_provider"] == "mock"
+    assert run_metadata["model_name"] == "mock-model"
+    assert run_metadata["temperature"] == 0.0
+    assert run_metadata["max_tokens"] == 512
+    assert run_metadata["timeout_seconds"] == 30.0
+    assert run_metadata["outputs_path"] == str(result.outputs_path)
+    assert run_metadata["output_filename"] == "outputs.jsonl"
+    assert isinstance(run_metadata["duration_ms"], int)
+    assert run_metadata["duration_ms"] >= 0
+    assert run_metadata["attempted_count"] == 2
+    assert run_metadata["success_count"] == 2
+    assert run_metadata["error_count"] == 0
 
 
 def test_run_evaluation_config_changes_mode_and_model_metadata(tmp_path: Path) -> None:
@@ -142,7 +168,7 @@ def test_run_evaluation_writes_each_output_before_next_generation(tmp_path: Path
 
     rows = _read_jsonl(result.outputs_path)
     assert [row["question_id"] for row in rows] == ["q0", "q1"]
-    assert [row["response"] for row in rows] == ["answer 1", "answer 2"]
+    assert [row["prediction"] for row in rows] == ["answer 1", "answer 2"]
 
 
 def test_run_evaluation_records_llm_error_and_continues(tmp_path: Path) -> None:
@@ -180,8 +206,13 @@ def test_run_evaluation_records_llm_error_and_continues(tmp_path: Path) -> None:
     assert result.error_count == 1
     assert [row["status"] for row in rows] == ["success", "error", "success"]
     assert rows[1]["question_id"] == "q1"
-    assert rows[1]["response"] == ""
+    assert rows[1]["question"] == "Question 1?"
+    assert rows[1]["prediction"] == ""
     assert rows[1]["error"] == "provider timeout"
+    assert isinstance(rows[1]["latency_ms"], int)
+    assert rows[1]["latency_ms"] >= 0
+    assert rows[1]["input_tokens"] is None
+    assert rows[1]["output_tokens"] is None
     assert rows[2]["question_id"] == "q2"
 
 

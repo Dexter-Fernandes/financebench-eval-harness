@@ -654,6 +654,7 @@ def test_run_eval_command_writes_mock_run_outputs(
     assert f"Evaluation run output: {run_dir}" in captured.out
     assert f"Wrote config snapshot to {run_dir / 'config.yaml'}" in captured.out
     assert f"Wrote 1 outputs to {run_dir / 'outputs.jsonl'}" in captured.out
+    assert f"Wrote run metadata to {run_dir / 'run_metadata.json'}" in captured.out
     assert "Attempted: 1" in captured.out
     assert "Succeeded: 1" in captured.out
     assert "Errors: 0" in captured.out
@@ -663,8 +664,20 @@ def test_run_eval_command_writes_mock_run_outputs(
     rows = _read_jsonl(run_dir / "outputs.jsonl")
     assert len(rows) == 1
     assert rows[0]["question_id"] == "q1"
+    assert rows[0]["question"] == "What is revenue?"
+    assert rows[0]["prediction"] == "mock response"
     assert rows[0]["model_provider"] == "mock"
+    assert rows[0]["model_name"] == "mock-llm"
+    assert rows[0]["latency_ms"] >= 0
+    assert rows[0]["input_tokens"] is None
+    assert rows[0]["output_tokens"] is None
     assert rows[0]["status"] == "success"
+    assert "response" not in rows[0]
+    run_metadata = json.loads((run_dir / "run_metadata.json").read_text(encoding="utf-8"))
+    assert run_metadata["output_filename"] == "outputs.jsonl"
+    assert run_metadata["attempted_count"] == 1
+    assert run_metadata["success_count"] == 1
+    assert run_metadata["error_count"] == 0
 
 
 def _write_valid_questions(path: Path) -> None:

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from json import JSONDecodeError
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import yaml
@@ -24,6 +25,7 @@ class EvaluationRunResult:
     output_dir: Path
     config_path: Path
     outputs_path: Path
+    run_metadata_path: Path
     example_count: int
     attempted_count: int
     success_count: int
@@ -42,8 +44,10 @@ def run_evaluation_from_config(
 ) -> EvaluationRunResult:
     examples = _load_processed_examples_from_path(config.settings.dataset_path)
     limited_examples = examples[: config.settings.limit]
-    output_dir = config.settings.output_dir / (run_id or _timestamp_run_id())
+    resolved_run_id = run_id or _timestamp_run_id()
+    output_dir = config.settings.output_dir / resolved_run_id
     output_dir.mkdir(parents=True, exist_ok=True)
+    run_started_at = perf_counter()
 
     config_path = output_dir / "config.yaml"
     config_path.write_text(
@@ -52,6 +56,7 @@ def run_evaluation_from_config(
     )
 
     outputs_path = output_dir / "outputs.jsonl"
+    run_metadata_path = output_dir / "run_metadata.json"
     evaluation_config = load_evaluation_config()
     success_count = 0
     error_count = 0
@@ -62,27 +67,34 @@ def run_evaluation_from_config(
                 config.settings.mode,
                 example,
             )
-            response = ""
+            question = _string_field(example, "question")
+            prediction = ""
             status = "success"
             error: str | None = None
+            started_at = perf_counter()
             try:
-                response = llm_client.generate(rendered_prompt.text)
+                prediction = llm_client.generate(rendered_prompt.text)
                 success_count += 1
             except LLMProviderError as exc:
                 status = "error"
                 error = str(exc)
                 error_count += 1
+            latency_ms = int(round((perf_counter() - started_at) * 1000))
 
             output_row = {
                 "question_id": _string_field(example, "question_id"),
+                "question": question,
+                "gold_answer": _string_field(example, "gold_answer"),
+                "prediction": prediction,
                 "mode": rendered_prompt.mode.value,
-                "prompt_id": rendered_prompt.prompt_id,
-                "prompt_version": rendered_prompt.prompt_version,
                 "model_provider": config.model.provider,
                 "model_name": config.model.model_name,
+                "prompt_id": rendered_prompt.prompt_id,
+                "prompt_version": rendered_prompt.prompt_version,
                 "prompt": rendered_prompt.text,
-                "response": response,
-                "gold_answer": _string_field(example, "gold_answer"),
+                "latency_ms": latency_ms,
+                "input_tokens": None,
+                "output_tokens": None,
                 "status": status,
                 "error": error,
             }
@@ -90,11 +102,35 @@ def run_evaluation_from_config(
             outputs_file.flush()
 
     attempted_count = len(limited_examples)
+    duration_ms = int(round((perf_counter() - run_started_at) * 1000))
+    run_metadata = {
+        "run_id": resolved_run_id,
+        "output_dir": str(output_dir),
+        "dataset_path": str(config.settings.dataset_path),
+        "mode": config.settings.mode.value,
+        "limit": config.settings.limit,
+        "model_provider": config.model.provider,
+        "model_name": config.model.model_name,
+        "temperature": config.model.temperature,
+        "max_tokens": config.model.max_tokens,
+        "timeout_seconds": config.model.timeout_seconds,
+        "outputs_path": str(outputs_path),
+        "output_filename": outputs_path.name,
+        "duration_ms": duration_ms,
+        "attempted_count": attempted_count,
+        "success_count": success_count,
+        "error_count": error_count,
+    }
+    run_metadata_path.write_text(
+        json.dumps(run_metadata, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
 
     return EvaluationRunResult(
         output_dir=output_dir,
         config_path=config_path,
         outputs_path=outputs_path,
+        run_metadata_path=run_metadata_path,
         example_count=attempted_count,
         attempted_count=attempted_count,
         success_count=success_count,

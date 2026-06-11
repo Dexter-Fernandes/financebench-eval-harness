@@ -274,6 +274,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Evaluation run output: {result.output_dir}")
         print(f"Wrote config snapshot to {result.config_path}")
         print(f"Wrote {result.example_count} outputs to {result.outputs_path}")
+        print(f"Wrote run metadata to {result.run_metadata_path}")
         print(f"Attempted: {result.attempted_count}")
         print(f"Succeeded: {result.success_count}")
         print(f"Errors: {result.error_count}")
