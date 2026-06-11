@@ -1,5 +1,5 @@
 dataset:
   name: financebench
-  questions_path: data/raw/financebench/questions20.jsonl
+  questions_path: data/raw/financebench/questions.jsonl
   documents_dir: data/raw/financebench/documents
   processed_dir: data/processed/financebench

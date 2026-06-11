@@ -531,6 +531,67 @@ def test_validate_evidence_pages_command_succeeds_when_all_evidence_matches(
     assert captured.err == ""
 
 
+def test_build_examples_command_writes_processed_files_and_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    data_root = tmp_path / "financebench"
+    _write_questions(
+        data_root / "questions.jsonl",
+        [
+            _question_row(
+                "financebench_id_1",
+                evidence=[
+                    {
+                        "doc_name": "ACME_2022_10K",
+                        "evidence_page_num": 12,
+                        "evidence_text": "Revenue was $123.",
+                    }
+                ],
+            ),
+            _question_row(
+                "financebench_id_2",
+                evidence=[
+                    {
+                        "doc_name": "ACME_2022_10K",
+                        "evidence_page_num": 12,
+                        "evidence_text": "Gross profit was $456.",
+                    }
+                ],
+            ),
+        ],
+    )
+    _write_pages(
+        tmp_path / "data" / "processed" / "financebench" / "pages.jsonl",
+        [
+            {
+                "doc_name": "ACME_2022_10K.pdf",
+                "page_num": 13,
+                "text": "Revenue was\n$\n123.",
+            }
+        ],
+    )
+
+    exit_code = main(["build-examples", "--data-root", str(data_root)])
+
+    captured = capsys.readouterr()
+    examples_path = tmp_path / "data" / "processed" / "financebench" / "examples.jsonl"
+    rejected_path = (
+        tmp_path / "data" / "processed" / "financebench" / "examples.rejected.jsonl"
+    )
+    assert exit_code == 0
+    assert "Accepted examples: 1" in captured.out
+    assert "Rejected examples: 1" in captured.out
+    assert "evidence_text_not_found_in_page_text: 1" in captured.out
+    assert f"Wrote accepted examples to {examples_path}." in captured.out
+    assert f"Wrote rejected examples to {rejected_path}." in captured.out
+    assert captured.err == ""
+    assert _read_jsonl(examples_path)[0]["question_id"] == "financebench_id_1"
+    assert _read_jsonl(rejected_path)[0]["question_id"] == "financebench_id_2"
+
+
 def _write_valid_questions(path: Path) -> None:
     path.write_text(
         json.dumps(_question_row("financebench_id_1"))
@@ -558,11 +619,13 @@ def _write_pages(path: Path, rows: list[dict]) -> None:
 def _question_row(question_id: str, evidence: list[dict] | None = None) -> dict:
     return {
         "financebench_id": question_id,
+        "company": "ACME Corp",
         "question": "What is revenue?",
         "answer": "$123.00",
         "doc_name": "ACME_2022_10K",
         "evidence": evidence
-        or [
+        if evidence is not None
+        else [
             {
                 "doc_name": "ACME_2022_10K",
                 "evidence_page_num": 12,

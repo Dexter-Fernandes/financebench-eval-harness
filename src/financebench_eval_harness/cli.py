@@ -17,6 +17,7 @@ from financebench_eval_harness.data import (
     EvidencePageCheck,
     FinanceBenchQuestionLoadError,
     MissingFinanceBenchDataError,
+    build_processed_financebench_examples,
     extract_financebench_documents,
     load_financebench_examples,
     validate_financebench_evidence_pages,
@@ -73,6 +74,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Validate FinanceBench evidence text against extracted document pages.",
     )
     _add_dataset_path_arguments(evidence_pages_parser)
+
+    build_examples_parser = subparsers.add_parser(
+        "build-examples",
+        help="Build canonical processed FinanceBench examples JSONL.",
+    )
+    _add_dataset_path_arguments(build_examples_parser)
 
     return parser
 
@@ -186,6 +193,26 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         print("Evidence page validation failed.")
         return 1
+
+    if args.command == "build-examples":
+        try:
+            dataset_config = _resolve_dataset_config(args.config, args.data_root)
+            result = build_processed_financebench_examples(dataset_config)
+        except (
+            DatasetConfigError,
+            DocumentPageLoadError,
+            FinanceBenchQuestionLoadError,
+        ) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        print(f"Accepted examples: {result.accepted_count}")
+        print(f"Rejected examples: {result.rejected_count}")
+        for reason, count in result.skip_reason_counts.items():
+            print(f"{reason}: {count}")
+        print(f"Wrote accepted examples to {result.output_path.resolve()}.")
+        print(f"Wrote rejected examples to {result.rejected_path.resolve()}.")
+        return 0
 
     parser.error(f"Unknown command: {args.command}")
     return 2

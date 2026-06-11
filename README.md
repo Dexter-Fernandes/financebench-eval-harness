@@ -79,3 +79,16 @@ and to print every evidence text match or mismatch, run:
 ```bash
 financebench-harness validate-evidence-pages
 ```
+
+To build the canonical processed examples file for downstream harness stages, run:
+
+```bash
+financebench-harness build-examples
+```
+
+This writes accepted examples to `data/processed/financebench/examples.jsonl` and
+auditable rejected examples to `data/processed/financebench/examples.rejected.jsonl`.
+Downstream retrieval and evaluation code should read `examples.jsonl` rather than
+the raw FinanceBench question file. Each processed evidence item includes
+`matched_page_num`, which is the exact `page_num` from `pages.jsonl`; look up the
+matched page by canonical PDF filename plus `matched_page_num`.

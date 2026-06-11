@@ -544,6 +544,264 @@ def test_validate_financebench_evidence_pages_reports_missing_pages_file(
     assert str(config.processed_dir / "pages.jsonl") in str(exc_info.value)
 
 
+def test_canonical_pdf_name_normalizes_document_names() -> None:
+    canonical_pdf_name = getattr(data_module, "canonical_pdf_name", None)
+    assert callable(canonical_pdf_name), "canonical_pdf_name should exist"
+
+    assert canonical_pdf_name("ACME_2022_10K") == "ACME_2022_10K.pdf"
+    assert canonical_pdf_name("ACME_2022_10K.pdf") == "ACME_2022_10K.pdf"
+
+
+def test_build_processed_financebench_examples_writes_canonical_jsonl(
+    tmp_path: Path,
+) -> None:
+    config = _dataset_config(tmp_path)
+    _write_questions(
+        config.questions_path,
+        [
+            _question_row(
+                evidence=[
+                    {
+                        "doc_name": "ACME_2022_10K",
+                        "evidence_page_num": 12,
+                        "evidence_text": "Revenue was $123.",
+                    },
+                    {
+                        "doc_name": "ACME_2022_10K.pdf",
+                        "evidence_page_num": 21,
+                        "evidence_text": "Costs were $100.",
+                    },
+                ],
+            )
+        ],
+    )
+    _write_pages(
+        config.processed_dir / "pages.jsonl",
+        [
+            {
+                "doc_name": "ACME_2022_10K.pdf",
+                "page_num": 12,
+                "text": "Previous page.",
+            },
+            {
+                "doc_name": "ACME_2022_10K.pdf",
+                "page_num": 13,
+                "text": "Revenue was\n$\n123. More text.",
+            },
+            {
+                "doc_name": "ACME_2022_10K.pdf",
+                "page_num": 21,
+                "text": "Costs were $100.",
+            },
+        ],
+    )
+
+    builder = getattr(data_module, "build_processed_financebench_examples", None)
+    assert callable(builder), "build_processed_financebench_examples should exist"
+    result = builder(config)
+
+    assert result.accepted_count == 1
+    assert result.rejected_count == 0
+    assert result.output_path == config.processed_dir / "examples.jsonl"
+    assert result.rejected_path == config.processed_dir / "examples.rejected.jsonl"
+    assert result.skip_reason_counts == {}
+    assert _read_jsonl(result.rejected_path) == []
+
+    rows = _read_jsonl(result.output_path)
+    assert rows == [
+        {
+            "question_id": "financebench_id_1",
+            "company": "ACME Corp",
+            "doc_name": "ACME_2022_10K",
+            "question": "What is revenue?",
+            "gold_answer": "$123.00",
+            "evidence": [
+                {
+                    "raw_evidence_index": 0,
+                    "doc_name": "ACME_2022_10K",
+                    "gold_page_num": 12,
+                    "matched_page_num": 13,
+                    "evidence_text": "Revenue was $123.",
+                    "page_text": "Revenue was\n$\n123. More text.",
+                    "evidence_quality": {
+                        "normalizer": "financebench_text_v1",
+                        "match_status": "exact_match",
+                        "normalized_substring_match": True,
+                        "normalized_full_page_match": False,
+                        "evidence_char_count": 17,
+                        "page_char_count": 29,
+                        "line_coverage_ratio": 1.0,
+                        "warnings": ["matched_page_num_differs_from_gold_page_num"],
+                    },
+                },
+                {
+                    "raw_evidence_index": 1,
+                    "doc_name": "ACME_2022_10K.pdf",
+                    "gold_page_num": 21,
+                    "matched_page_num": 21,
+                    "evidence_text": "Costs were $100.",
+                    "page_text": "Costs were $100.",
+                    "evidence_quality": {
+                        "normalizer": "financebench_text_v1",
+                        "match_status": "exact_match",
+                        "normalized_substring_match": True,
+                        "normalized_full_page_match": True,
+                        "evidence_char_count": 16,
+                        "page_char_count": 16,
+                        "line_coverage_ratio": 1.0,
+                        "warnings": [],
+                    },
+                },
+            ],
+        }
+    ]
+
+
+def test_build_processed_financebench_examples_writes_rejected_jsonl(
+    tmp_path: Path,
+) -> None:
+    config = _dataset_config(tmp_path)
+    _write_questions(
+        config.questions_path,
+        [
+            _question_row(question_id="financebench_id_1", evidence=[]),
+            _question_row(
+                question_id="financebench_id_2",
+                evidence=[
+                    {
+                        "doc_name": "ACME_2022_10K",
+                        "evidence_page_num": "12",
+                        "evidence_text": "Revenue was $123.",
+                    }
+                ],
+            ),
+            _question_row(
+                question_id="financebench_id_3",
+                evidence=[
+                    {
+                        "doc_name": "MISSING_2022_10K",
+                        "evidence_page_num": 4,
+                        "evidence_text": "Missing document text.",
+                    }
+                ],
+            ),
+            _question_row(
+                question_id="financebench_id_4",
+                evidence=[
+                    {
+                        "doc_name": "BETA_2022_10K",
+                        "evidence_page_num": 4,
+                        "evidence_text": "Missing page text.",
+                    }
+                ],
+            ),
+            _question_row(
+                question_id="financebench_id_5",
+                evidence=[
+                    {
+                        "doc_name": "ACME_2022_10K",
+                        "evidence_page_num": 12,
+                        "evidence_text": "Revenue was $123.",
+                    }
+                ],
+            ),
+        ],
+    )
+    _write_pages(
+        config.processed_dir / "pages.jsonl",
+        [
+            {
+                "doc_name": "BETA_2022_10K.pdf",
+                "page_num": 99,
+                "text": "Missing page text.",
+            },
+            {
+                "doc_name": "ACME_2022_10K.pdf",
+                "page_num": 13,
+                "text": "This page is unrelated.",
+            },
+        ],
+    )
+
+    result = data_module.build_processed_financebench_examples(config)
+
+    assert result.accepted_count == 0
+    assert result.rejected_count == 5
+    assert result.skip_reason_counts == {
+        "missing_evidence": 1,
+        "malformed_evidence": 1,
+        "missing_extracted_document": 1,
+        "missing_extracted_page": 1,
+        "evidence_text_not_found_in_page_text": 1,
+    }
+    assert _read_jsonl(result.output_path) == []
+    rejected = _read_jsonl(result.rejected_path)
+    assert [row["question_id"] for row in rejected] == [
+        "financebench_id_1",
+        "financebench_id_2",
+        "financebench_id_3",
+        "financebench_id_4",
+        "financebench_id_5",
+    ]
+    assert [row["skip_reason"] for row in rejected] == [
+        "missing_evidence",
+        "malformed_evidence",
+        "missing_extracted_document",
+        "missing_extracted_page",
+        "evidence_text_not_found_in_page_text",
+    ]
+    assert rejected[0]["evidence"] == []
+    assert rejected[1]["evidence"][0]["raw_evidence_index"] == 0
+    assert rejected[1]["evidence"][0]["evidence_quality"]["match_status"] == (
+        "malformed_evidence"
+    )
+    assert rejected[4]["evidence"][0]["matched_page_num"] == 13
+    assert rejected[4]["evidence"][0]["evidence_quality"]["normalizer"] == (
+        "financebench_text_v1"
+    )
+    assert rejected[4]["evidence"][0]["evidence_quality"]["normalized_substring_match"] is False
+
+
+def test_load_processed_financebench_examples_reads_only_processed_jsonl(
+    tmp_path: Path,
+) -> None:
+    config = _dataset_config(tmp_path)
+    processed_row = {
+        "question_id": "financebench_id_1",
+        "company": "ACME Corp",
+        "doc_name": "ACME_2022_10K",
+        "question": "What is revenue?",
+        "gold_answer": "$123.00",
+        "evidence": [
+            {
+                "raw_evidence_index": 0,
+                "doc_name": "ACME_2022_10K",
+                "gold_page_num": 12,
+                "matched_page_num": 13,
+                "evidence_text": "Revenue was $123.",
+                "page_text": "Revenue was $123.",
+                "evidence_quality": {
+                    "normalizer": "financebench_text_v1",
+                    "match_status": "exact_match",
+                    "normalized_substring_match": True,
+                    "normalized_full_page_match": True,
+                    "evidence_char_count": 17,
+                    "page_char_count": 17,
+                    "line_coverage_ratio": 1.0,
+                    "warnings": [],
+                },
+            }
+        ],
+    }
+    _write_jsonl(config.processed_dir / "examples.jsonl", [processed_row])
+
+    loader = getattr(data_module, "load_processed_financebench_examples", None)
+    assert callable(loader), "load_processed_financebench_examples should exist"
+    rows = loader(config)
+
+    assert rows == [processed_row]
+
+
 def test_validate_financebench_data_layout_accepts_dataset_config(tmp_path: Path) -> None:
     data_root = tmp_path / "financebench"
     documents = data_root / "documents"
@@ -612,8 +870,13 @@ def _write_questions(path: Path, rows: list[dict]) -> None:
 
 def _write_pages(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    _write_jsonl(path, rows)
+
+
+def _write_jsonl(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        "\n".join(json.dumps(row) for row in rows) + "\n",
+        "".join(json.dumps(row) + "\n" for row in rows),
         encoding="utf-8",
     )
 
@@ -626,11 +889,13 @@ def _question_row(
 ) -> dict:
     return {
         "financebench_id": question_id,
+        "company": "ACME Corp",
         "question": "What is revenue?",
         "answer": answer,
         "doc_name": "ACME_2022_10K",
         "evidence": evidence
-        or [
+        if evidence is not None
+        else [
             {
                 "doc_name": "ACME_2022_10K",
                 "evidence_page_num": 12,
