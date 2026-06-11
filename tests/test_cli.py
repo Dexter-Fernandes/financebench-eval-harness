@@ -3,6 +3,7 @@ from pathlib import Path
 import json
 import pytest
 
+import financebench_eval_harness.data as data_module
 from financebench_eval_harness.cli import main
 
 
@@ -311,6 +312,102 @@ def test_validate_documents_command_warns_about_unused_docs(
     assert "Document registry validation passed." in captured.out
 
 
+def test_extract_documents_command_writes_processed_pages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    data_root = tmp_path / "financebench"
+    documents = data_root / "documents"
+    documents.mkdir(parents=True)
+    (documents / "ACME_2022_10K.pdf").write_text("pdf", encoding="utf-8")
+    monkeypatch.setattr(
+        data_module,
+        "_pdf_reader_class",
+        lambda: _fake_reader_factory(["page one", "page two"]),
+    )
+
+    exit_code = main(["extract-documents", "--data-root", str(data_root)])
+
+    captured = capsys.readouterr()
+    pages_path = tmp_path / "data" / "processed" / "financebench" / "pages.jsonl"
+    failures_path = (
+        tmp_path / "data" / "processed" / "financebench" / "extraction_failures.jsonl"
+    )
+    assert exit_code == 0
+    assert "Extracting ACME_2022_10K.pdf" in captured.out
+    assert "Extracted 1 documents." in captured.out
+    assert "Wrote 2 pages" in captured.out
+    assert "Extraction failures: 0" in captured.out
+    assert len(_read_jsonl(pages_path)) == 2
+    assert failures_path.read_text(encoding="utf-8") == ""
+
+
+def test_extract_documents_command_supports_config_processed_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    data_root = tmp_path / "financebench"
+    processed_dir = tmp_path / "custom_processed"
+    config_path = tmp_path / "dataset.yaml"
+    documents = data_root / "documents"
+    documents.mkdir(parents=True)
+    (documents / "ACME_2022_10K.pdf").write_text("pdf", encoding="utf-8")
+    config_path.write_text(
+        "\n".join(
+            [
+                "dataset:",
+                "  name: financebench",
+                f"  questions_path: {data_root / 'questions.jsonl'}",
+                f"  documents_dir: {documents}",
+                f"  processed_dir: {processed_dir}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(data_module, "_pdf_reader_class", lambda: _fake_reader_factory(["page"]))
+
+    exit_code = main(["extract-documents", "--config", str(config_path)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Extracting ACME_2022_10K.pdf" in captured.out
+    assert f"Wrote 1 pages to {processed_dir / 'pages.jsonl'}." in captured.out
+    assert _read_jsonl(processed_dir / "pages.jsonl")[0]["text"] == "page"
+
+
+def test_extract_documents_command_writes_failure_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    data_root = tmp_path / "financebench"
+    documents = data_root / "documents"
+    documents.mkdir(parents=True)
+    (documents / "ACME_2022_10K.pdf").write_text("pdf", encoding="utf-8")
+    monkeypatch.setattr(
+        data_module,
+        "_pdf_reader_class",
+        lambda: _fake_reader_factory([RuntimeError("page broke")]),
+    )
+
+    exit_code = main(["extract-documents", "--data-root", str(data_root)])
+
+    captured = capsys.readouterr()
+    failures_path = (
+        tmp_path / "data" / "processed" / "financebench" / "extraction_failures.jsonl"
+    )
+    assert exit_code == 0
+    assert "Extracting ACME_2022_10K.pdf" in captured.out
+    assert "Extraction failures: 1" in captured.out
+    assert _read_jsonl(failures_path) == [
+        {"doc_name": "ACME_2022_10K.pdf", "page_num": 1, "error": "page broke"}
+    ]
+
+
 def _write_valid_questions(path: Path) -> None:
     path.write_text(
         json.dumps(_question_row("financebench_id_1"))
@@ -333,3 +430,29 @@ def _question_row(question_id: str) -> dict:
             }
         ],
     }
+
+
+def _fake_reader_factory(page_outputs: list[object]):
+    class FakePage:
+        def __init__(self, output: object) -> None:
+            self.output = output
+
+        def extract_text(self) -> str:
+            if isinstance(self.output, Exception):
+                raise self.output
+            return str(self.output)
+
+    class FakeReader:
+        def __init__(self, path: str) -> None:
+            self.path = path
+            self.pages = [FakePage(output) for output in page_outputs]
+
+    return FakeReader
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]

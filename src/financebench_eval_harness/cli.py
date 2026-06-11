@@ -12,8 +12,10 @@ from financebench_eval_harness.config import (
     load_dataset_config,
 )
 from financebench_eval_harness.data import (
+    DocumentExtractionError,
     FinanceBenchQuestionLoadError,
     MissingFinanceBenchDataError,
+    extract_financebench_documents,
     load_financebench_examples,
     validate_financebench_document_registry,
     validate_financebench_dataset,
@@ -56,6 +58,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Validate FinanceBench evidence document file coverage.",
     )
     _add_dataset_path_arguments(documents_parser)
+
+    extract_parser = subparsers.add_parser(
+        "extract-documents",
+        help="Extract local FinanceBench PDF text page by page.",
+    )
+    _add_dataset_path_arguments(extract_parser)
 
     return parser
 
@@ -124,6 +132,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"unused {filename}")
 
         print("Document registry validation passed.")
+        return 0
+
+    if args.command == "extract-documents":
+        try:
+            dataset_config = _resolve_dataset_config(args.config, args.data_root)
+            result = extract_financebench_documents(
+                dataset_config,
+                on_document_start=lambda path: print(f"Extracting {path.name}"),
+            )
+        except (DatasetConfigError, DocumentExtractionError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        print(f"Extracted {result.document_count} documents.")
+        print(f"Wrote {result.page_count} pages to {result.output_path}.")
+        print(f"Extraction failures: {result.failure_count}")
+        if result.failure_count:
+            print(f"Failure details written to {result.failures_path}.")
         return 0
 
     parser.error(f"Unknown command: {args.command}")

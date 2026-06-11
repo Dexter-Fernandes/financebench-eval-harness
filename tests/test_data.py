@@ -5,9 +5,12 @@ import pytest
 
 from financebench_eval_harness.config import DatasetConfig
 from financebench_eval_harness.data import (
+    DocumentExtractionError,
     FinanceBenchQuestionLoadError,
     MissingFinanceBenchDataError,
     build_document_registry,
+    extract_document_pages,
+    extract_financebench_documents,
     load_financebench_examples,
     validate_financebench_document_registry,
     validate_financebench_dataset,
@@ -314,6 +317,93 @@ def test_validate_financebench_document_registry_warns_about_unused_docs(
     assert result.unused_documents == ("UNUSED_2022_10K.pdf",)
 
 
+def test_extract_document_pages_returns_one_based_page_records(tmp_path: Path) -> None:
+    document_path = tmp_path / "ACME_2022_10K.pdf"
+    document_path.write_text("pdf", encoding="utf-8")
+
+    pages, failures = extract_document_pages(
+        document_path,
+        pdf_reader_factory=_fake_reader_factory(["page one", "page two"]),
+    )
+
+    assert failures == []
+    assert [page.doc_name for page in pages] == ["ACME_2022_10K.pdf", "ACME_2022_10K.pdf"]
+    assert [page.page_num for page in pages] == [1, 2]
+    assert [page.text for page in pages] == ["page one", "page two"]
+
+
+def test_extract_document_pages_records_page_failures(tmp_path: Path) -> None:
+    document_path = tmp_path / "ACME_2022_10K.pdf"
+    document_path.write_text("pdf", encoding="utf-8")
+
+    pages, failures = extract_document_pages(
+        document_path,
+        pdf_reader_factory=_fake_reader_factory(["page one", RuntimeError("boom")]),
+    )
+
+    assert len(pages) == 1
+    assert pages[0].page_num == 1
+    assert len(failures) == 1
+    assert failures[0].doc_name == "ACME_2022_10K.pdf"
+    assert failures[0].page_num == 2
+    assert failures[0].error == "boom"
+
+
+def test_extract_financebench_documents_writes_pages_and_failures_jsonl(
+    tmp_path: Path,
+) -> None:
+    config = _dataset_config(tmp_path)
+    config.documents_dir.mkdir(parents=True)
+    (config.documents_dir / "ACME_2022_10K.pdf").write_text("pdf", encoding="utf-8")
+
+    result = extract_financebench_documents(
+        config,
+        pdf_reader_factory=_fake_reader_factory(["page one", RuntimeError("boom")]),
+    )
+
+    assert result.document_count == 1
+    assert result.page_count == 1
+    assert result.failure_count == 1
+    page_records = _read_jsonl(result.output_path)
+    failure_records = _read_jsonl(result.failures_path)
+    assert page_records == [
+        {"doc_name": "ACME_2022_10K.pdf", "page_num": 1, "text": "page one"}
+    ]
+    assert failure_records == [
+        {"doc_name": "ACME_2022_10K.pdf", "page_num": 2, "error": "boom"}
+    ]
+
+
+def test_extract_financebench_documents_reports_started_documents_in_sorted_order(
+    tmp_path: Path,
+) -> None:
+    config = _dataset_config(tmp_path)
+    config.documents_dir.mkdir(parents=True)
+    (config.documents_dir / "BETA_2022_10K.pdf").write_text("pdf", encoding="utf-8")
+    (config.documents_dir / "ACME_2022_10K.pdf").write_text("pdf", encoding="utf-8")
+    started_documents: list[str] = []
+
+    extract_financebench_documents(
+        config,
+        pdf_reader_factory=_fake_reader_factory(["page"]),
+        on_document_start=lambda path: started_documents.append(path.name),
+    )
+
+    assert started_documents == ["ACME_2022_10K.pdf", "BETA_2022_10K.pdf"]
+
+
+def test_extract_financebench_documents_reports_empty_documents_dir(
+    tmp_path: Path,
+) -> None:
+    config = _dataset_config(tmp_path)
+    config.documents_dir.mkdir(parents=True)
+
+    with pytest.raises(DocumentExtractionError) as exc_info:
+        extract_financebench_documents(config, pdf_reader_factory=_fake_reader_factory([]))
+
+    assert "No PDF documents found" in str(exc_info.value)
+
+
 def test_validate_financebench_data_layout_accepts_dataset_config(tmp_path: Path) -> None:
     data_root = tmp_path / "financebench"
     documents = data_root / "documents"
@@ -400,3 +490,29 @@ def _question_row(
             }
         ],
     }
+
+
+def _fake_reader_factory(page_outputs: list[object]):
+    class FakePage:
+        def __init__(self, output: object) -> None:
+            self.output = output
+
+        def extract_text(self) -> str:
+            if isinstance(self.output, Exception):
+                raise self.output
+            return str(self.output)
+
+    class FakeReader:
+        def __init__(self, path: str) -> None:
+            self.path = path
+            self.pages = [FakePage(output) for output in page_outputs]
+
+    return FakeReader
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]

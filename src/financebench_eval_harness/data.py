@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import json
 from json import JSONDecodeError
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from financebench_eval_harness.config import DatasetConfig, load_dataset_config
 
@@ -99,6 +99,35 @@ class DocumentRegistryValidationResult:
         return not self.missing_documents
 
 
+@dataclass(frozen=True)
+class DocumentPage:
+    """Extracted text for one document page."""
+
+    doc_name: str
+    page_num: int
+    text: str
+
+
+@dataclass(frozen=True)
+class DocumentExtractionFailure:
+    """A document or page extraction failure."""
+
+    doc_name: str
+    page_num: int | None
+    error: str
+
+
+@dataclass(frozen=True)
+class DocumentExtractionResult:
+    """Summary of an extraction run."""
+
+    page_count: int
+    document_count: int
+    failure_count: int
+    output_path: Path
+    failures_path: Path
+
+
 class MissingFinanceBenchDataError(FileNotFoundError):
     """Raised when the expected local FinanceBench data layout is missing."""
 
@@ -119,6 +148,10 @@ class MissingFinanceBenchDataError(FileNotFoundError):
 
 class FinanceBenchQuestionLoadError(ValueError):
     """Raised when FinanceBench question records cannot be loaded."""
+
+
+class DocumentExtractionError(ValueError):
+    """Raised when document extraction cannot be started."""
 
 
 def validate_financebench_data_layout(
@@ -286,6 +319,92 @@ def validate_financebench_document_registry(
     )
 
 
+def extract_document_pages(
+    document_path: Path,
+    pdf_reader_factory: Any | None = None,
+) -> tuple[list[DocumentPage], list[DocumentExtractionFailure]]:
+    """Extract page text from one PDF document."""
+
+    reader_factory = pdf_reader_factory or _pdf_reader_class()
+    doc_name = document_path.name
+
+    try:
+        reader = reader_factory(str(document_path))
+    except Exception as exc:
+        return [], [
+            DocumentExtractionFailure(
+                doc_name=doc_name,
+                page_num=None,
+                error=str(exc),
+            )
+        ]
+
+    pages: list[DocumentPage] = []
+    failures: list[DocumentExtractionFailure] = []
+    for page_index, page in enumerate(reader.pages, start=1):
+        try:
+            text = page.extract_text() or ""
+        except Exception as exc:
+            failures.append(
+                DocumentExtractionFailure(
+                    doc_name=doc_name,
+                    page_num=page_index,
+                    error=str(exc),
+                )
+            )
+            continue
+
+        pages.append(DocumentPage(doc_name=doc_name, page_num=page_index, text=text))
+
+    return pages, failures
+
+
+def extract_financebench_documents(
+    dataset_config_or_path: DatasetConfig | str | Path | None = None,
+    pdf_reader_factory: Any | None = None,
+    on_document_start: Callable[[Path], None] | None = None,
+) -> DocumentExtractionResult:
+    """Extract local FinanceBench PDFs into processed page JSONL."""
+
+    config = _resolve_dataset_config(dataset_config_or_path)
+    if not config.documents_dir.is_dir():
+        raise DocumentExtractionError(
+            f"FinanceBench documents directory not found: {config.documents_dir}"
+        )
+
+    document_paths = sorted(config.documents_dir.glob("*.pdf"))
+    if not document_paths:
+        raise DocumentExtractionError(
+            f"No PDF documents found in FinanceBench documents directory: {config.documents_dir}"
+        )
+
+    pages: list[DocumentPage] = []
+    failures: list[DocumentExtractionFailure] = []
+    for document_path in document_paths:
+        if on_document_start is not None:
+            on_document_start(document_path)
+        document_pages, document_failures = extract_document_pages(
+            document_path,
+            pdf_reader_factory=pdf_reader_factory,
+        )
+        pages.extend(document_pages)
+        failures.extend(document_failures)
+
+    config.processed_dir.mkdir(parents=True, exist_ok=True)
+    output_path = config.processed_dir / "pages.jsonl"
+    failures_path = config.processed_dir / "extraction_failures.jsonl"
+    _write_document_pages(output_path, pages)
+    _write_document_failures(failures_path, failures)
+
+    return DocumentExtractionResult(
+        page_count=len(pages),
+        document_count=len(document_paths),
+        failure_count=len(failures),
+        output_path=output_path,
+        failures_path=failures_path,
+    )
+
+
 def _resolve_dataset_config(
     dataset_config_or_path: DatasetConfig | str | Path | None,
 ) -> DatasetConfig:
@@ -300,6 +419,52 @@ def _document_filename(doc_name: str) -> str:
     if doc_name.endswith(".pdf"):
         return doc_name
     return f"{doc_name}.pdf"
+
+
+def _pdf_reader_class() -> Any:
+    try:
+        from pypdf import PdfReader
+    except ImportError as exc:
+        raise DocumentExtractionError(
+            "pypdf is required for PDF extraction. Install the project dependencies "
+            "with `python -m pip install -e .`."
+        ) from exc
+    return PdfReader
+
+
+def _write_document_pages(path: Path, pages: list[DocumentPage]) -> None:
+    with path.open("w", encoding="utf-8") as pages_file:
+        for page in pages:
+            pages_file.write(
+                json.dumps(
+                    {
+                        "doc_name": page.doc_name,
+                        "page_num": page.page_num,
+                        "text": page.text,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+
+
+def _write_document_failures(
+    path: Path,
+    failures: list[DocumentExtractionFailure],
+) -> None:
+    with path.open("w", encoding="utf-8") as failures_file:
+        for failure in failures:
+            failures_file.write(
+                json.dumps(
+                    {
+                        "doc_name": failure.doc_name,
+                        "page_num": failure.page_num,
+                        "error": failure.error,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
 
 
 def _issue_from_load_error(

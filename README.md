@@ -66,3 +66,9 @@ To check that evidence document names resolve to local files, run:
 ```bash
 financebench-harness validate-documents
 ```
+
+To extract local PDF text page by page into `data/processed/financebench/pages.jsonl`, run:
+
+```bash
+financebench-harness extract-documents
+```
