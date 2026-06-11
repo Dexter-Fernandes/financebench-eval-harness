@@ -92,3 +92,20 @@ Downstream retrieval and evaluation code should read `examples.jsonl` rather tha
 the raw FinanceBench question file. Each processed evidence item includes
 `matched_page_num`, which is the exact `page_num` from `pages.jsonl`; look up the
 matched page by canonical PDF filename plus `matched_page_num`.
+
+## Baseline Evaluation Modes
+
+M2 evaluation starts with two non-RAG baselines configured in
+`configs/evaluation/baselines.yaml`:
+
+- `closed_book`: the model receives only the FinanceBench question, with no
+  retrieval results and no document context. This measures what the model can
+  answer from parametric knowledge or reasoning alone.
+- `oracle_context`: the model receives the question plus the gold evidence text
+  from the processed example. This removes retrieval from the path and helps
+  isolate generation and reasoning quality when the relevant evidence is already
+  available.
+
+These modes are comparison baselines, not benchmark claims. Recorded runs should
+still capture the model provider, model name, prompt id, dataset slice, and
+evaluation settings before results are reported.

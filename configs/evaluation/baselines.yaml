@@ -1,0 +1,24 @@
+evaluation:
+  modes:
+    closed_book:
+      prompt:
+        id: closed_book_v1
+        template: |
+          Answer the FinanceBench question directly.
+          Do not invent citations or claim that document evidence was provided.
+          If the answer cannot be determined, say so clearly.
+
+          Question:
+          {question}
+    oracle_context:
+      prompt:
+        id: oracle_context_v1
+        template: |
+          Use only the evidence context below to answer the FinanceBench question.
+          If the evidence context is insufficient, say so clearly.
+
+          Evidence context:
+          {evidence_context}
+
+          Question:
+          {question}
