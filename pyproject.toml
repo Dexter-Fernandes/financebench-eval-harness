@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "financebench-eval-harness"
+version = "0.1.0"
+description = "Evaluation harness for document-grounded QA experiments on public FinanceBench samples."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Dexter" }]
+dependencies = [
+    "PyYAML>=6.0",
+    "pypdf>=4.0",
+    "cryptography>=3.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+financebench-harness = "financebench_eval_harness.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

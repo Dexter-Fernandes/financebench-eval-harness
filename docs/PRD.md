@@ -79,12 +79,19 @@ This project will not:
 
 The project uses the public FinanceBench open-source sample.
 
-Expected source files:
+Expected local data layout:
 
 ```text
-data/financebench_open_source.jsonl
-data/financebench_document_information.jsonl
+data/
+  raw/
+    financebench/
+      questions.jsonl
+      documents/
+  processed/
+    financebench/
 ```
+
+The public FinanceBench question records should be placed at `data/raw/financebench/questions.jsonl`. Public or locally available source documents should be placed under `data/raw/financebench/documents/`. Derived, normalized, or cached data should live under `data/processed/financebench/`.
 
 ### Data Handling Requirements
 
