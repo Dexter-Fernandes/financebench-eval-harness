@@ -1,0 +1,11 @@
+eval:
+  dataset_path: data/processed/financebench/examples.jsonl
+  output_dir: runs
+  mode: closed_book
+  limit: 20
+model:
+  provider: mock
+  model_name: mock-llm
+  temperature: 0.0
+  max_tokens: 512
+  timeout_seconds: 30

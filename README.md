@@ -120,3 +120,17 @@ LLM calls should go through the shared provider interface in
 default local config lives at `configs/llm/local.yaml` and records provider,
 model name, temperature, max tokens, and timeout settings. Tests can use
 `MockLLMClient` to exercise harness code without making API calls.
+
+## Run A Mock Evaluation
+
+Use `configs/evaluation/local_mock.yaml` for a deterministic local run that
+renders prompts and writes mock LLM responses without calling an external API:
+
+```bash
+financebench-harness run-eval --config configs/evaluation/local_mock.yaml
+```
+
+Each run writes a directory under `runs/` containing `config.yaml`, the
+normalized config snapshot used for reproducibility, and `outputs.jsonl`, one
+record per evaluated example. Change `eval.mode`, `eval.limit`, or the `model`
+settings in the YAML file to compare configurations without editing code.

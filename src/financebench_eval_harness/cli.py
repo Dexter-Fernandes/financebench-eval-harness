@@ -25,6 +25,18 @@ from financebench_eval_harness.data import (
     validate_financebench_dataset,
     validate_financebench_data_layout,
 )
+from financebench_eval_harness.llm import (
+    LLMClient,
+    LLMConfigError,
+    MockLLMClient,
+    OllamaClient,
+)
+from financebench_eval_harness.run import EvaluationRunError, run_evaluation_from_config
+from financebench_eval_harness.run_config import (
+    DEFAULT_EVALUATION_RUN_CONFIG_PATH,
+    EvaluationRunConfigError,
+    load_evaluation_run_config,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -80,6 +92,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Build canonical processed FinanceBench examples JSONL.",
     )
     _add_dataset_path_arguments(build_examples_parser)
+
+    run_eval_parser = subparsers.add_parser(
+        "run-eval",
+        help="Run a configured baseline evaluation.",
+    )
+    run_eval_parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_EVALUATION_RUN_CONFIG_PATH,
+        help="Evaluation run config YAML path.",
+    )
+    run_eval_parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional deterministic run directory name.",
+    )
 
     return parser
 
@@ -214,6 +242,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Wrote rejected examples to {result.rejected_path.resolve()}.")
         return 0
 
+    if args.command == "run-eval":
+        try:
+            run_config = load_evaluation_run_config(args.config)
+            llm_client = _build_llm_client(run_config)
+            result = run_evaluation_from_config(
+                run_config,
+                llm_client,
+                run_id=args.run_id,
+            )
+        except (
+            EvaluationRunConfigError,
+            EvaluationRunError,
+            LLMConfigError,
+        ) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        print(f"Evaluation run output: {result.output_dir}")
+        print(f"Wrote config snapshot to {result.config_path}")
+        print(f"Wrote {result.example_count} outputs to {result.outputs_path}")
+        return 0
+
     parser.error(f"Unknown command: {args.command}")
     return 2
 
@@ -237,6 +287,17 @@ def _resolve_dataset_config(config_path: Path, data_root: Path | None) -> Datase
     if data_root is not None:
         return DatasetConfig.from_data_root(data_root)
     return load_dataset_config(config_path)
+
+
+def _build_llm_client(run_config) -> LLMClient:
+    if run_config.model.provider == "mock":
+        return MockLLMClient(
+            run_config.model,
+            responses=["mock response"] * run_config.settings.limit,
+        )
+    if run_config.model.provider == "ollama":
+        return OllamaClient(run_config.model)
+    raise LLMConfigError(f"Unsupported LLM provider: {run_config.model.provider}")
 
 
 def _format_evidence_page_check(check: EvidencePageCheck) -> str:

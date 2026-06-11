@@ -592,6 +592,57 @@ def test_build_examples_command_writes_processed_files_and_summary(
     assert _read_jsonl(rejected_path)[0]["question_id"] == "financebench_id_2"
 
 
+def test_run_eval_command_writes_mock_run_outputs(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    examples_path = tmp_path / "examples.jsonl"
+    _write_pages(
+        examples_path,
+        [
+            {
+                "question_id": "q1",
+                "question": "What is revenue?",
+                "gold_answer": "$123.00",
+                "evidence": [{"evidence_text": "Revenue was $123."}],
+            }
+        ],
+    )
+    config_path = tmp_path / "eval.yaml"
+    output_dir = tmp_path / "runs"
+    config_path.write_text(
+        "\n".join(
+            [
+                "eval:",
+                f"  dataset_path: {examples_path}",
+                f"  output_dir: {output_dir}",
+                "  mode: closed_book",
+                "  limit: 1",
+                "model:",
+                "  provider: mock",
+                "  model_name: mock-llm",
+                "  temperature: 0.0",
+                "  max_tokens: 512",
+                "  timeout_seconds: 30",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = main(["run-eval", "--config", str(config_path), "--run-id", "cli-run"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    run_dir = output_dir / "cli-run"
+    assert f"Evaluation run output: {run_dir}" in captured.out
+    assert f"Wrote config snapshot to {run_dir / 'config.yaml'}" in captured.out
+    assert f"Wrote 1 outputs to {run_dir / 'outputs.jsonl'}" in captured.out
+    assert captured.err == ""
+    rows = _read_jsonl(run_dir / "outputs.jsonl")
+    assert rows[0]["question_id"] == "q1"
+    assert rows[0]["model_provider"] == "mock"
+
+
 def _write_valid_questions(path: Path) -> None:
     path.write_text(
         json.dumps(_question_row("financebench_id_1"))

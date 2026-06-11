@@ -1,0 +1,126 @@
+from pathlib import Path
+
+import pytest
+
+from financebench_eval_harness.evaluation import EvaluationMode
+from financebench_eval_harness.llm import LLMGenerationConfig
+from financebench_eval_harness.run_config import (
+    DEFAULT_EVALUATION_RUN_CONFIG_PATH,
+    EvaluationRunConfig,
+    EvaluationRunConfigError,
+    EvaluationRunSettings,
+    load_evaluation_run_config,
+)
+
+
+def test_load_evaluation_run_config_reads_default_local_mock_config() -> None:
+    config = load_evaluation_run_config()
+
+    assert DEFAULT_EVALUATION_RUN_CONFIG_PATH == Path(
+        "configs/evaluation/local_mock.yaml"
+    )
+    assert config.settings == EvaluationRunSettings(
+        dataset_path=Path("data/processed/financebench/examples.jsonl"),
+        output_dir=Path("runs"),
+        mode=EvaluationMode.CLOSED_BOOK,
+        limit=20,
+    )
+    assert config.model == LLMGenerationConfig(
+        provider="mock",
+        model_name="mock-llm",
+        temperature=0.0,
+        max_tokens=512,
+        timeout_seconds=30.0,
+    )
+
+
+def test_load_evaluation_run_config_reads_custom_model_and_mode(tmp_path: Path) -> None:
+    config_path = tmp_path / "eval.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "eval:",
+                f"  dataset_path: {tmp_path / 'examples.jsonl'}",
+                f"  output_dir: {tmp_path / 'runs'}",
+                "  mode: oracle_context",
+                "  limit: 2",
+                "model:",
+                "  provider: ollama",
+                "  model_name: custom-model",
+                "  temperature: 0.3",
+                "  max_tokens: 128",
+                "  timeout_seconds: 5",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_evaluation_run_config(config_path)
+
+    assert config == EvaluationRunConfig(
+        settings=EvaluationRunSettings(
+            dataset_path=tmp_path / "examples.jsonl",
+            output_dir=tmp_path / "runs",
+            mode=EvaluationMode.ORACLE_CONTEXT,
+            limit=2,
+        ),
+        model=LLMGenerationConfig(
+            provider="ollama",
+            model_name="custom-model",
+            temperature=0.3,
+            max_tokens=128,
+            timeout_seconds=5.0,
+        ),
+    )
+
+
+def test_load_evaluation_run_config_reports_invalid_mode(tmp_path: Path) -> None:
+    config_path = tmp_path / "eval.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "eval:",
+                "  dataset_path: examples.jsonl",
+                "  output_dir: runs",
+                "  mode: unsupported",
+                "  limit: 1",
+                "model:",
+                "  provider: mock",
+                "  model_name: mock-llm",
+                "  temperature: 0.0",
+                "  max_tokens: 512",
+                "  timeout_seconds: 30",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvaluationRunConfigError) as exc_info:
+        load_evaluation_run_config(config_path)
+
+    assert "Unknown evaluation mode: unsupported" in str(exc_info.value)
+
+
+def test_load_evaluation_run_config_reports_missing_required_keys(tmp_path: Path) -> None:
+    config_path = tmp_path / "eval.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "eval:",
+                "  dataset_path: examples.jsonl",
+                "  mode: closed_book",
+                "model:",
+                "  provider: mock",
+                "  model_name: mock-llm",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvaluationRunConfigError) as exc_info:
+        load_evaluation_run_config(config_path)
+
+    message = str(exc_info.value)
+    assert "Evaluation run config missing required eval key(s):" in message
+    assert "limit" in message
+    assert "output_dir" in message
