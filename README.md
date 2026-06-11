@@ -96,7 +96,8 @@ matched page by canonical PDF filename plus `matched_page_num`.
 ## Baseline Evaluation Modes
 
 M2 evaluation starts with two non-RAG baselines configured in
-`configs/evaluation/baselines.yaml`:
+`configs/evaluation/baselines.yaml`. The config references versioned prompt
+template files under `prompts/baselines/`:
 
 - `closed_book`: the model receives only the FinanceBench question, with no
   retrieval results and no document context. This measures what the model can
@@ -107,5 +108,7 @@ M2 evaluation starts with two non-RAG baselines configured in
   available.
 
 These modes are comparison baselines, not benchmark claims. Recorded runs should
-still capture the model provider, model name, prompt id, dataset slice, and
-evaluation settings before results are reported.
+still capture the model provider, model name, prompt id, prompt version, dataset
+slice, and evaluation settings before results are reported. Prompt rendering
+returns run metadata with the evaluation mode, prompt id, prompt version, and
+template path so future run artefacts can record which prompt was used.

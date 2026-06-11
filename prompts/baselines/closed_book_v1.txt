@@ -1,0 +1,6 @@
+You are answering a financial analysis question.
+
+Question:
+{question}
+
+Answer the question directly. If you are unsure, say you do not know.

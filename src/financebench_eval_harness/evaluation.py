@@ -24,8 +24,30 @@ class PromptTemplate:
     """Prompt template configured for one evaluation mode."""
 
     id: str
+    version: str
     mode: EvaluationMode
+    template_path: Path
     template: str
+
+
+@dataclass(frozen=True)
+class RenderedPrompt:
+    """Rendered prompt text and metadata for future run artefacts."""
+
+    text: str
+    mode: EvaluationMode
+    prompt_id: str
+    prompt_version: str
+    template_path: Path
+
+    @property
+    def run_metadata(self) -> dict[str, str]:
+        return {
+            "evaluation_mode": self.mode.value,
+            "prompt_id": self.prompt_id,
+            "prompt_version": self.prompt_version,
+            "prompt_template_path": str(self.template_path),
+        }
 
 
 @dataclass(frozen=True)
@@ -102,16 +124,23 @@ def render_prompt(
     *,
     question: str,
     evidence_texts: list[str] | tuple[str, ...] | None = None,
-) -> str:
+) -> RenderedPrompt:
     prompt_template = config.prompt_for(mode)
     clean_question = _required_text(question, "question")
-    context = ""
+    evidence_text = ""
     if prompt_template.mode is EvaluationMode.ORACLE_CONTEXT:
-        context = _joined_evidence_context(evidence_texts)
+        evidence_text = _joined_evidence_context(evidence_texts)
 
-    return prompt_template.template.format(
+    text = prompt_template.template.format(
         question=clean_question,
-        evidence_context=context,
+        evidence_text=evidence_text,
+    )
+    return RenderedPrompt(
+        text=text,
+        mode=prompt_template.mode,
+        prompt_id=prompt_template.id,
+        prompt_version=prompt_template.version,
+        template_path=prompt_template.template_path,
     )
 
 
@@ -119,7 +148,7 @@ def render_prompt_for_processed_example(
     config: EvaluationConfig,
     mode: EvaluationMode | str,
     processed_example: dict[str, Any],
-) -> str:
+) -> RenderedPrompt:
     question = processed_example.get("question")
     evidence = processed_example.get("evidence")
     evidence_texts: list[str] = []
@@ -161,15 +190,24 @@ def _prompt_template_from_mapping(
             f"Evaluation prompt id must be a non-empty string: {mode}"
         )
 
-    template = prompt.get("template")
-    if not isinstance(template, str) or not template.strip():
+    version = prompt.get("version")
+    if not isinstance(version, str) or not version.strip():
         raise EvaluationConfigError(
-            f"Evaluation prompt template must be a non-empty string: {mode}"
+            f"Evaluation prompt version must be a non-empty string: {mode}"
+        )
+
+    template_path = _path_from_prompt_mapping(prompt, mode)
+    template = _read_prompt_template(template_path)
+    if not template.strip():
+        raise EvaluationConfigError(
+            f"Evaluation prompt template file must be non-empty: {template_path}"
         )
 
     return PromptTemplate(
         id=prompt_id,
+        version=version,
         mode=evaluation_mode,
+        template_path=template_path,
         template=template,
     )
 
@@ -182,6 +220,29 @@ def _evaluation_mode_from_value(mode: EvaluationMode | str) -> EvaluationMode:
         return EvaluationMode(mode)
     except ValueError as exc:
         raise EvaluationConfigError(f"Unknown evaluation mode: {mode}") from exc
+
+
+def _path_from_prompt_mapping(prompt: dict[str, Any], mode: str) -> Path:
+    value = prompt.get("template_path")
+    if not isinstance(value, str) or not value.strip():
+        raise EvaluationConfigError(
+            f"Evaluation prompt template_path must be a non-empty string: {mode}"
+        )
+    return Path(value)
+
+
+def _read_prompt_template(template_path: Path) -> str:
+    if not template_path.is_file():
+        raise EvaluationConfigError(
+            f"Evaluation prompt template file not found: {template_path}"
+        )
+
+    try:
+        return template_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise EvaluationConfigError(
+            f"Could not read evaluation prompt template file: {template_path}"
+        ) from exc
 
 
 def _required_text(value: str, field_name: str) -> str:
@@ -217,6 +278,7 @@ __all__ = [
     "EvaluationConfigError",
     "EvaluationMode",
     "PromptTemplate",
+    "RenderedPrompt",
     "load_evaluation_config",
     "render_prompt",
     "render_prompt_for_processed_example",

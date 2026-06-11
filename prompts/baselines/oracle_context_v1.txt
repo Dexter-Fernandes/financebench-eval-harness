@@ -1,0 +1,9 @@
+You are answering a financial analysis question using provided evidence.
+
+Question:
+{question}
+
+Evidence:
+{evidence_text}
+
+Answer using only the provided evidence.
