@@ -112,3 +112,11 @@ still capture the model provider, model name, prompt id, prompt version, dataset
 slice, and evaluation settings before results are reported. Prompt rendering
 returns run metadata with the evaluation mode, prompt id, prompt version, and
 template path so future run artefacts can record which prompt was used.
+
+## LLM Provider Configuration
+
+LLM calls should go through the shared provider interface in
+`financebench_eval_harness.llm` rather than calling a provider directly. The
+default local config lives at `configs/llm/local.yaml` and records provider,
+model name, temperature, max tokens, and timeout settings. Tests can use
+`MockLLMClient` to exercise harness code without making API calls.
