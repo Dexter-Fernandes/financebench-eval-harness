@@ -13,10 +13,13 @@ from financebench_eval_harness.config import (
 )
 from financebench_eval_harness.data import (
     DocumentExtractionError,
+    DocumentPageLoadError,
+    EvidencePageCheck,
     FinanceBenchQuestionLoadError,
     MissingFinanceBenchDataError,
     extract_financebench_documents,
     load_financebench_examples,
+    validate_financebench_evidence_pages,
     validate_financebench_document_registry,
     validate_financebench_dataset,
     validate_financebench_data_layout,
@@ -64,6 +67,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Extract local FinanceBench PDF text page by page.",
     )
     _add_dataset_path_arguments(extract_parser)
+
+    evidence_pages_parser = subparsers.add_parser(
+        "validate-evidence-pages",
+        help="Validate FinanceBench evidence text against extracted document pages.",
+    )
+    _add_dataset_path_arguments(evidence_pages_parser)
 
     return parser
 
@@ -152,6 +161,32 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"Failure details written to {result.failures_path}.")
         return 0
 
+    if args.command == "validate-evidence-pages":
+        try:
+            dataset_config = _resolve_dataset_config(args.config, args.data_root)
+            result = validate_financebench_evidence_pages(dataset_config)
+        except (
+            DatasetConfigError,
+            DocumentPageLoadError,
+            FinanceBenchQuestionLoadError,
+        ) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        for check in result.checks:
+            print(_format_evidence_page_check(check))
+
+        print(f"Total evidence checks: {result.total_count}")
+        print(f"Matches: {result.matched_count}")
+        print(f"Mismatches: {result.mismatch_count}")
+
+        if result.is_valid:
+            print("Evidence page validation passed.")
+            return 0
+
+        print("Evidence page validation failed.")
+        return 1
+
     parser.error(f"Unknown command: {args.command}")
     return 2
 
@@ -175,6 +210,27 @@ def _resolve_dataset_config(config_path: Path, data_root: Path | None) -> Datase
     if data_root is not None:
         return DatasetConfig.from_data_root(data_root)
     return load_dataset_config(config_path)
+
+
+def _format_evidence_page_check(check: EvidencePageCheck) -> str:
+    status = "MATCH" if check.is_match else "MISMATCH"
+    document_path = str(check.document_path) if check.document_path is not None else "missing"
+    return (
+        f"{status} {check.question_id} evidence[{check.evidence_index}] "
+        f"doc={check.document_filename} "
+        f"path={document_path} "
+        f"evidence_page={check.evidence_page_num} "
+        f"extracted_page={check.extracted_page_num} "
+        f"reason={check.reason} "
+        f"method={check.match_method} "
+        f"evidence={_quote_excerpt(check.evidence_excerpt)} "
+        f"page={_quote_excerpt(check.page_excerpt)}"
+    )
+
+
+def _quote_excerpt(text: str) -> str:
+    safe_text = text.replace('"', "'")
+    return f'"{safe_text}"'
 
 
 if __name__ == "__main__":

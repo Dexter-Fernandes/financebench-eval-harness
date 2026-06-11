@@ -128,6 +128,46 @@ class DocumentExtractionResult:
     failures_path: Path
 
 
+@dataclass(frozen=True)
+class EvidencePageCheck:
+    """Validation outcome for one FinanceBench evidence item."""
+
+    question_id: str
+    evidence_index: int
+    document_filename: str
+    document_path: Path | None
+    evidence_page_num: int
+    extracted_page_num: int
+    is_match: bool
+    reason: str
+    evidence_excerpt: str
+    page_excerpt: str
+    match_method: str = "alphanumeric_substring"
+
+
+@dataclass(frozen=True)
+class EvidencePageValidationResult:
+    """Aggregate validation result for FinanceBench evidence-page links."""
+
+    checks: tuple[EvidencePageCheck, ...]
+
+    @property
+    def total_count(self) -> int:
+        return len(self.checks)
+
+    @property
+    def matched_count(self) -> int:
+        return sum(1 for check in self.checks if check.is_match)
+
+    @property
+    def mismatch_count(self) -> int:
+        return self.total_count - self.matched_count
+
+    @property
+    def is_valid(self) -> bool:
+        return self.mismatch_count == 0
+
+
 class MissingFinanceBenchDataError(FileNotFoundError):
     """Raised when the expected local FinanceBench data layout is missing."""
 
@@ -152,6 +192,10 @@ class FinanceBenchQuestionLoadError(ValueError):
 
 class DocumentExtractionError(ValueError):
     """Raised when document extraction cannot be started."""
+
+
+class DocumentPageLoadError(ValueError):
+    """Raised when extracted document pages cannot be loaded."""
 
 
 def validate_financebench_data_layout(
@@ -319,6 +363,78 @@ def validate_financebench_document_registry(
     )
 
 
+def validate_financebench_evidence_pages(
+    dataset_config_or_path: DatasetConfig | str | Path | None = None,
+) -> EvidencePageValidationResult:
+    """Validate evidence document and page references against extracted page text."""
+
+    config = _resolve_dataset_config(dataset_config_or_path)
+    examples = load_financebench_examples(config)
+    registry = build_document_registry(config)
+    page_index = _load_document_page_index(config.processed_dir / "pages.jsonl")
+
+    checks: list[EvidencePageCheck] = []
+    for example in examples:
+        for evidence_index, evidence in enumerate(example.evidence, start=1):
+            document_filename = _document_filename(evidence.doc_name)
+            document_path = registry.get(document_filename)
+            extracted_page_num = evidence.page_num + 1
+            evidence_excerpt = _text_excerpt(evidence.text)
+
+            if document_path is None:
+                checks.append(
+                    EvidencePageCheck(
+                        question_id=example.question_id,
+                        evidence_index=evidence_index,
+                        document_filename=document_filename,
+                        document_path=None,
+                        evidence_page_num=evidence.page_num,
+                        extracted_page_num=extracted_page_num,
+                        is_match=False,
+                        reason="missing_document",
+                        evidence_excerpt=evidence_excerpt,
+                        page_excerpt="",
+                    )
+                )
+                continue
+
+            page_text = page_index.get((document_filename, extracted_page_num))
+            if page_text is None:
+                checks.append(
+                    EvidencePageCheck(
+                        question_id=example.question_id,
+                        evidence_index=evidence_index,
+                        document_filename=document_filename,
+                        document_path=document_path,
+                        evidence_page_num=evidence.page_num,
+                        extracted_page_num=extracted_page_num,
+                        is_match=False,
+                        reason="missing_page",
+                        evidence_excerpt=evidence_excerpt,
+                        page_excerpt="",
+                    )
+                )
+                continue
+
+            is_match = _alphanumeric_substring_match(evidence.text, page_text)
+            checks.append(
+                EvidencePageCheck(
+                    question_id=example.question_id,
+                    evidence_index=evidence_index,
+                    document_filename=document_filename,
+                    document_path=document_path,
+                    evidence_page_num=evidence.page_num,
+                    extracted_page_num=extracted_page_num,
+                    is_match=is_match,
+                    reason="matched" if is_match else "text_mismatch",
+                    evidence_excerpt=evidence_excerpt,
+                    page_excerpt=_text_excerpt(page_text),
+                )
+            )
+
+    return EvidencePageValidationResult(checks=tuple(checks))
+
+
 def extract_document_pages(
     document_path: Path,
     pdf_reader_factory: Any | None = None,
@@ -430,6 +546,77 @@ def _pdf_reader_class() -> Any:
             "with `python -m pip install -e .`."
         ) from exc
     return PdfReader
+
+
+def _load_document_page_index(path: Path) -> dict[tuple[str, int], str]:
+    if not path.is_file():
+        raise DocumentPageLoadError(
+            f"Extracted document pages file not found: {path}. "
+            "Run `financebench-harness extract-documents` first."
+        )
+
+    page_index: dict[tuple[str, int], str] = {}
+    try:
+        with path.open(encoding="utf-8") as pages_file:
+            for line_number, line in enumerate(pages_file, start=1):
+                if not line.strip():
+                    continue
+
+                try:
+                    row = json.loads(line)
+                except JSONDecodeError as exc:
+                    raise DocumentPageLoadError(
+                        f"Invalid extracted page JSONL at line {line_number}: {exc.msg}"
+                    ) from exc
+
+                if not isinstance(row, dict):
+                    raise DocumentPageLoadError(
+                        f"Invalid extracted page row at line {line_number}: expected object"
+                    )
+
+                doc_name = row.get("doc_name")
+                page_num = row.get("page_num")
+                text = row.get("text")
+                if not isinstance(doc_name, str) or not doc_name.strip():
+                    raise DocumentPageLoadError(
+                        f"Invalid extracted page row at line {line_number}: "
+                        "missing or empty 'doc_name'"
+                    )
+                if not isinstance(page_num, int) or isinstance(page_num, bool):
+                    raise DocumentPageLoadError(
+                        f"Invalid extracted page row at line {line_number}: "
+                        "missing or invalid 'page_num'"
+                    )
+                if not isinstance(text, str):
+                    raise DocumentPageLoadError(
+                        f"Invalid extracted page row at line {line_number}: "
+                        "missing or invalid 'text'"
+                    )
+
+                page_index[(doc_name, page_num)] = text
+    except OSError as exc:
+        raise DocumentPageLoadError(
+            f"Could not read extracted document pages file: {path}"
+        ) from exc
+
+    return page_index
+
+
+def _alphanumeric_substring_match(evidence_text: str, page_text: str) -> bool:
+    evidence = _normalize_alphanumeric(evidence_text)
+    page = _normalize_alphanumeric(page_text)
+    return bool(evidence) and evidence in page
+
+
+def _normalize_alphanumeric(text: str) -> str:
+    return "".join(char for char in text.casefold() if char.isalnum())
+
+
+def _text_excerpt(text: str, limit: int = 160) -> str:
+    excerpt = " ".join(text.split())
+    if len(excerpt) <= limit:
+        return excerpt
+    return f"{excerpt[: limit - 3]}..."
 
 
 def _write_document_pages(path: Path, pages: list[DocumentPage]) -> None:

@@ -408,6 +408,129 @@ def test_extract_documents_command_writes_failure_file(
     ]
 
 
+def test_validate_evidence_pages_command_prints_match_and_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    data_root = tmp_path / "financebench"
+    documents = data_root / "documents"
+    documents.mkdir(parents=True)
+    document_path = documents / "ACME_2022_10K.pdf"
+    document_path.write_text("pdf", encoding="utf-8")
+    _write_questions(
+        data_root / "questions.jsonl",
+        [
+            _question_row(
+                "financebench_id_1",
+                evidence=[
+                    {
+                        "doc_name": "ACME_2022_10K",
+                        "evidence_page_num": 3,
+                        "evidence_text": "Revenue was $123.",
+                    }
+                ],
+            ),
+            _question_row(
+                "financebench_id_2",
+                evidence=[
+                    {
+                        "doc_name": "ACME_2022_10K",
+                        "evidence_page_num": 4,
+                        "evidence_text": "Gross profit was $456.",
+                    }
+                ],
+            ),
+        ],
+    )
+    _write_pages(
+        tmp_path / "data" / "processed" / "financebench" / "pages.jsonl",
+        [
+            {
+                "doc_name": "ACME_2022_10K.pdf",
+                "page_num": 4,
+                "text": "Revenue was\n$\n123.",
+            },
+            {
+                "doc_name": "ACME_2022_10K.pdf",
+                "page_num": 5,
+                "text": "This page is unrelated.",
+            },
+        ],
+    )
+
+    try:
+        exit_code = main(["validate-evidence-pages", "--data-root", str(data_root)])
+    except SystemExit as exc:
+        pytest.fail(f"validate-evidence-pages command should be registered: {exc}")
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "MATCH financebench_id_1 evidence[1]" in captured.out
+    assert "MISMATCH financebench_id_2 evidence[1]" in captured.out
+    assert "doc=ACME_2022_10K.pdf" in captured.out
+    assert f"path={document_path}" in captured.out
+    assert "evidence_page=3 extracted_page=4" in captured.out
+    assert "reason=matched method=alphanumeric_substring" in captured.out
+    assert "reason=text_mismatch method=alphanumeric_substring" in captured.out
+    assert "Evidence page validation failed." in captured.out
+    assert "Total evidence checks: 2" in captured.out
+    assert "Matches: 1" in captured.out
+    assert "Mismatches: 1" in captured.out
+    assert captured.err == ""
+
+
+def test_validate_evidence_pages_command_succeeds_when_all_evidence_matches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    data_root = tmp_path / "financebench"
+    documents = data_root / "documents"
+    documents.mkdir(parents=True)
+    (documents / "ACME_2022_10K.pdf").write_text("pdf", encoding="utf-8")
+    _write_questions(
+        data_root / "questions.jsonl",
+        [
+            _question_row(
+                "financebench_id_1",
+                evidence=[
+                    {
+                        "doc_name": "ACME_2022_10K",
+                        "evidence_page_num": 0,
+                        "evidence_text": "Revenue was $123.",
+                    }
+                ],
+            )
+        ],
+    )
+    _write_pages(
+        tmp_path / "data" / "processed" / "financebench" / "pages.jsonl",
+        [
+            {
+                "doc_name": "ACME_2022_10K.pdf",
+                "page_num": 1,
+                "text": "Revenue was\n$\n123.",
+            }
+        ],
+    )
+
+    exit_code = main(["validate-evidence-pages", "--data-root", str(data_root)])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "MATCH financebench_id_1 evidence[1]" in captured.out
+    assert "MISMATCH" not in captured.out
+    assert "evidence_page=0 extracted_page=1" in captured.out
+    assert "Evidence page validation passed." in captured.out
+    assert "Total evidence checks: 1" in captured.out
+    assert "Matches: 1" in captured.out
+    assert "Mismatches: 0" in captured.out
+    assert captured.err == ""
+
+
 def _write_valid_questions(path: Path) -> None:
     path.write_text(
         json.dumps(_question_row("financebench_id_1"))
@@ -416,13 +539,30 @@ def _write_valid_questions(path: Path) -> None:
     )
 
 
-def _question_row(question_id: str) -> dict:
+def _write_questions(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_pages(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _question_row(question_id: str, evidence: list[dict] | None = None) -> dict:
     return {
         "financebench_id": question_id,
         "question": "What is revenue?",
         "answer": "$123.00",
         "doc_name": "ACME_2022_10K",
-        "evidence": [
+        "evidence": evidence
+        or [
             {
                 "doc_name": "ACME_2022_10K",
                 "evidence_page_num": 12,

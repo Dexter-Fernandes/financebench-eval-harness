@@ -2,9 +2,9 @@
 
 ## Current State
 
-- The repository is in planning and documentation setup.
-- `docs/PRD.md` defines the intended FinanceBench evaluation harness, success criteria, milestones, and data boundaries.
-- No source code, CLI, dataset loader, model provider integration, eval runner, or report generator has been implemented yet.
+- The repository has completed local data tooling for PRD Milestone 1.1 through M1.7.
+- Implemented capabilities include expected dataset layout validation, YAML dataset config, FinanceBench question loading, dataset schema validation, document registry validation, PDF page extraction, and evidence-to-page validation.
+- `financebench-harness validate-evidence-pages` links each evidence item to a local document, extracted page, and deterministic text match/mismatch result.
 
 ## Intended Build Path
 
@@ -14,10 +14,11 @@
 
 ## Next Engineering Milestone
 
-- Implement Milestone 1 from the PRD: dataset loading, JSONL validation, experiment configuration conventions, and a minimal run artefact shape.
+- Continue toward retrieval/chunking and evaluation-run plumbing, using M1.7 page-level evidence checks as the retrieval-ground-truth baseline.
 
 ## Current Boundaries
 
 - Use only public FinanceBench sample data.
-- Keep local datasets, PDFs, vector stores, model caches, secrets, and generated run artefacts out of version control.
+- Keep local datasets, PDFs, processed page JSONL, vector stores, model caches, secrets, and generated run artefacts out of version control.
+- Treat local files such as `data/raw/financebench/questions20.jsonl` as ignored development conveniences unless a committed sample/slice strategy is explicitly added.
 - Do not publish benchmark claims or metrics until they are produced by reproducible runs.

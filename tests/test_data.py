@@ -3,6 +3,7 @@ from pathlib import Path
 import json
 import pytest
 
+import financebench_eval_harness.data as data_module
 from financebench_eval_harness.config import DatasetConfig
 from financebench_eval_harness.data import (
     DocumentExtractionError,
@@ -404,6 +405,145 @@ def test_extract_financebench_documents_reports_empty_documents_dir(
     assert "No PDF documents found" in str(exc_info.value)
 
 
+def test_validate_financebench_evidence_pages_matches_extracted_offset_page(
+    tmp_path: Path,
+) -> None:
+    config = _dataset_config(tmp_path)
+    config.documents_dir.mkdir(parents=True)
+    document_path = config.documents_dir / "ACME_2022_10K.pdf"
+    document_path.write_text("pdf", encoding="utf-8")
+    _write_questions(config.questions_path, [_question_row()])
+    _write_pages(
+        config.processed_dir / "pages.jsonl",
+        [
+            {
+                "doc_name": "ACME_2022_10K.pdf",
+                "page_num": 12,
+                "text": "Previous page.",
+            },
+            {
+                "doc_name": "ACME_2022_10K.pdf",
+                "page_num": 13,
+                "text": "Revenue was\n$\n123.",
+            },
+        ],
+    )
+
+    validator = getattr(data_module, "validate_financebench_evidence_pages", None)
+    assert callable(validator), "validate_financebench_evidence_pages should exist"
+
+    result = validator(config)
+
+    assert result.is_valid
+    assert result.total_count == 1
+    assert result.matched_count == 1
+    assert result.mismatch_count == 0
+    check = result.checks[0]
+    assert check.question_id == "financebench_id_1"
+    assert check.evidence_index == 1
+    assert check.document_filename == "ACME_2022_10K.pdf"
+    assert check.document_path == document_path
+    assert check.evidence_page_num == 12
+    assert check.extracted_page_num == 13
+    assert check.reason == "matched"
+    assert check.evidence_excerpt == "Revenue was $123."
+    assert "Revenue was" in check.page_excerpt
+
+
+def test_validate_financebench_evidence_pages_reports_mismatch_reasons(
+    tmp_path: Path,
+) -> None:
+    config = _dataset_config(tmp_path)
+    config.documents_dir.mkdir(parents=True)
+    acme_path = config.documents_dir / "ACME_2022_10K.pdf"
+    beta_path = config.documents_dir / "BETA_2022_10K.pdf"
+    acme_path.write_text("pdf", encoding="utf-8")
+    beta_path.write_text("pdf", encoding="utf-8")
+    _write_questions(
+        config.questions_path,
+        [
+            _question_row(
+                question_id="financebench_id_1",
+                evidence=[
+                    {
+                        "doc_name": "MISSING_2022_10K",
+                        "evidence_page_num": 1,
+                        "evidence_text": "Missing document text.",
+                    }
+                ],
+            ),
+            _question_row(
+                question_id="financebench_id_2",
+                evidence=[
+                    {
+                        "doc_name": "BETA_2022_10K",
+                        "evidence_page_num": 7,
+                        "evidence_text": "Missing page text.",
+                    }
+                ],
+            ),
+            _question_row(
+                question_id="financebench_id_3",
+                evidence=[
+                    {
+                        "doc_name": "ACME_2022_10K",
+                        "evidence_page_num": 5,
+                        "evidence_text": "Revenue was $123.",
+                    }
+                ],
+            ),
+        ],
+    )
+    _write_pages(
+        config.processed_dir / "pages.jsonl",
+        [
+            {
+                "doc_name": "BETA_2022_10K.pdf",
+                "page_num": 1,
+                "text": "A different BETA page.",
+            },
+            {
+                "doc_name": "ACME_2022_10K.pdf",
+                "page_num": 6,
+                "text": "This page does not contain the expected snippet.",
+            },
+        ],
+    )
+
+    result = data_module.validate_financebench_evidence_pages(config)
+
+    assert not result.is_valid
+    assert result.total_count == 3
+    assert result.matched_count == 0
+    assert result.mismatch_count == 3
+    assert [check.reason for check in result.checks] == [
+        "missing_document",
+        "missing_page",
+        "text_mismatch",
+    ]
+    assert result.checks[0].document_path is None
+    assert result.checks[1].document_path == beta_path
+    assert result.checks[2].document_path == acme_path
+    assert result.checks[1].extracted_page_num == 8
+    assert result.checks[2].page_excerpt == (
+        "This page does not contain the expected snippet."
+    )
+
+
+def test_validate_financebench_evidence_pages_reports_missing_pages_file(
+    tmp_path: Path,
+) -> None:
+    config = _dataset_config(tmp_path)
+    config.documents_dir.mkdir(parents=True)
+    (config.documents_dir / "ACME_2022_10K.pdf").write_text("pdf", encoding="utf-8")
+    _write_questions(config.questions_path, [_question_row()])
+
+    with pytest.raises(data_module.DocumentPageLoadError) as exc_info:
+        data_module.validate_financebench_evidence_pages(config)
+
+    assert str(config.processed_dir / "pages.jsonl") in str(exc_info.value)
+
+
 def test_validate_financebench_data_layout_accepts_dataset_config(tmp_path: Path) -> None:
     data_root = tmp_path / "financebench"
     documents = data_root / "documents"
@@ -463,6 +603,14 @@ def _dataset_config(tmp_path: Path) -> DatasetConfig:
 
 
 def _write_questions(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_pages(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         "\n".join(json.dumps(row) for row in rows) + "\n",

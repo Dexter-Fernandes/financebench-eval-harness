@@ -72,3 +72,10 @@ To extract local PDF text page by page into `data/processed/financebench/pages.j
 ```bash
 financebench-harness extract-documents
 ```
+
+To validate that each FinanceBench evidence item resolves to an extracted document page
+and to print every evidence text match or mismatch, run:
+
+```bash
+financebench-harness validate-evidence-pages
+```
