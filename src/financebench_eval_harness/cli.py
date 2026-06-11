@@ -12,7 +12,9 @@ from financebench_eval_harness.config import (
     load_dataset_config,
 )
 from financebench_eval_harness.data import (
+    FinanceBenchQuestionLoadError,
     MissingFinanceBenchDataError,
+    load_financebench_examples,
     validate_financebench_data_layout,
 )
 
@@ -52,11 +54,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             dataset_config = _resolve_dataset_config(args.config, args.data_root)
             layout = validate_financebench_data_layout(dataset_config)
-        except (DatasetConfigError, MissingFinanceBenchDataError) as exc:
+            examples = load_financebench_examples(dataset_config)
+        except (
+            DatasetConfigError,
+            FinanceBenchQuestionLoadError,
+            MissingFinanceBenchDataError,
+        ) as exc:
             print(str(exc), file=sys.stderr)
             return 1
 
         print(f"FinanceBench data layout is valid: {layout.root}")
+        print(f"Loaded {len(examples)} FinanceBench examples.")
         return 0
 
     parser.error(f"Unknown command: {args.command}")

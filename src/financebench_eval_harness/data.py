@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+from json import JSONDecodeError
 from pathlib import Path
+from typing import Any
 
-from financebench_eval_harness.config import DatasetConfig
+from financebench_eval_harness.config import DatasetConfig, load_dataset_config
 
 
 DEFAULT_DATA_ROOT = Path("data/raw/financebench")
@@ -37,6 +40,28 @@ class FinanceBenchDataLayout:
         return self.config.expected_layout_message()
 
 
+@dataclass(frozen=True)
+class FinanceBenchEvidence:
+    """Normalized evidence metadata for one FinanceBench example."""
+
+    doc_name: str
+    page_num: int
+    text: str
+
+
+@dataclass(frozen=True)
+class FinanceBenchExample:
+    """Normalized FinanceBench question/answer record."""
+
+    question_id: str
+    question: str
+    gold_answer: str
+    evidence_doc_name: str
+    evidence_page_num: int
+    evidence_text: str
+    evidence: tuple[FinanceBenchEvidence, ...]
+
+
 class MissingFinanceBenchDataError(FileNotFoundError):
     """Raised when the expected local FinanceBench data layout is missing."""
 
@@ -53,6 +78,10 @@ class MissingFinanceBenchDataError(FileNotFoundError):
             "and source documents under documents/, or pass --config PATH or "
             "--data-root PATH."
         )
+
+
+class FinanceBenchQuestionLoadError(ValueError):
+    """Raised when FinanceBench question records cannot be loaded."""
 
 
 def validate_financebench_data_layout(
@@ -80,3 +109,135 @@ def validate_financebench_data_layout(
         raise MissingFinanceBenchDataError(layout, missing_paths)
 
     return layout
+
+
+def load_financebench_examples(
+    dataset_config_or_path: DatasetConfig | str | Path | None = None,
+) -> list[FinanceBenchExample]:
+    """Load and normalize FinanceBench question records from configured JSONL."""
+
+    config = _resolve_dataset_config(dataset_config_or_path)
+    questions_path = config.questions_path
+
+    if not questions_path.is_file():
+        raise FinanceBenchQuestionLoadError(
+            f"FinanceBench questions file not found: {questions_path}"
+        )
+
+    examples: list[FinanceBenchExample] = []
+    try:
+        with questions_path.open(encoding="utf-8") as questions_file:
+            for line_number, line in enumerate(questions_file, start=1):
+                if not line.strip():
+                    continue
+                examples.append(_parse_financebench_example(line, line_number))
+    except OSError as exc:
+        raise FinanceBenchQuestionLoadError(
+            f"Could not read FinanceBench questions file: {questions_path}"
+        ) from exc
+
+    return examples
+
+
+def _resolve_dataset_config(
+    dataset_config_or_path: DatasetConfig | str | Path | None,
+) -> DatasetConfig:
+    if dataset_config_or_path is None:
+        return load_dataset_config()
+    if isinstance(dataset_config_or_path, DatasetConfig):
+        return dataset_config_or_path
+    return load_dataset_config(dataset_config_or_path)
+
+
+def _parse_financebench_example(line: str, line_number: int) -> FinanceBenchExample:
+    try:
+        row = json.loads(line)
+    except JSONDecodeError as exc:
+        raise FinanceBenchQuestionLoadError(
+            f"Invalid FinanceBench JSONL at line {line_number}: {exc.msg}"
+        ) from exc
+
+    if not isinstance(row, dict):
+        raise FinanceBenchQuestionLoadError(
+            f"Invalid FinanceBench row at line {line_number}: expected object"
+        )
+
+    question_id = _required_string(row, "financebench_id", line_number)
+    question = _required_string(row, "question", line_number)
+    gold_answer = _required_string(row, "answer", line_number)
+    evidence = _required_evidence(row, line_number)
+    primary_evidence = evidence[0]
+
+    return FinanceBenchExample(
+        question_id=question_id,
+        question=question,
+        gold_answer=gold_answer,
+        evidence_doc_name=primary_evidence.doc_name,
+        evidence_page_num=primary_evidence.page_num,
+        evidence_text=primary_evidence.text,
+        evidence=evidence,
+    )
+
+
+def _required_string(row: dict[str, Any], field: str, line_number: int) -> str:
+    value = row.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise FinanceBenchQuestionLoadError(
+            f"Invalid FinanceBench row at line {line_number}: missing or empty '{field}'"
+        )
+    return value
+
+
+def _required_evidence(
+    row: dict[str, Any],
+    line_number: int,
+) -> tuple[FinanceBenchEvidence, ...]:
+    raw_evidence = row.get("evidence")
+    if not isinstance(raw_evidence, list) or not raw_evidence:
+        raise FinanceBenchQuestionLoadError(
+            f"Invalid FinanceBench row at line {line_number}: missing or empty 'evidence'"
+        )
+
+    evidence_items = [
+        _parse_evidence_item(item, line_number, index)
+        for index, item in enumerate(raw_evidence, start=1)
+    ]
+    return tuple(evidence_items)
+
+
+def _parse_evidence_item(
+    item: Any,
+    line_number: int,
+    index: int,
+) -> FinanceBenchEvidence:
+    if not isinstance(item, dict):
+        raise FinanceBenchQuestionLoadError(
+            "Invalid FinanceBench row at line "
+            f"{line_number}: evidence[{index}] must be an object"
+        )
+
+    doc_name = _required_evidence_string(item, "doc_name", line_number, index)
+    text = _required_evidence_string(item, "evidence_text", line_number, index)
+    page_num = item.get("evidence_page_num")
+    if type(page_num) is not int:
+        raise FinanceBenchQuestionLoadError(
+            "Invalid FinanceBench row at line "
+            f"{line_number}: missing or invalid 'evidence[{index}].evidence_page_num'"
+        )
+
+    return FinanceBenchEvidence(doc_name=doc_name, page_num=page_num, text=text)
+
+
+def _required_evidence_string(
+    item: dict[str, Any],
+    field: str,
+    line_number: int,
+    index: int,
+) -> str:
+    value = item.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise FinanceBenchQuestionLoadError(
+            "Invalid FinanceBench row at line "
+            f"{line_number}: missing or empty 'evidence[{index}].{field}'"
+        )
+    return value
