@@ -4,7 +4,11 @@ from pathlib import Path
 import yaml
 
 from financebench_eval_harness.evaluation import EvaluationMode
-from financebench_eval_harness.llm import LLMGenerationConfig, MockLLMClient
+from financebench_eval_harness.llm import (
+    LLMGenerationConfig,
+    LLMProviderError,
+    MockLLMClient,
+)
 from financebench_eval_harness.run import run_evaluation_from_config
 from financebench_eval_harness.run_config import EvaluationRunConfig, EvaluationRunSettings
 
@@ -29,6 +33,9 @@ def test_run_evaluation_with_mock_llm_writes_config_snapshot_and_outputs(
     assert result.config_path == result.output_dir / "config.yaml"
     assert result.outputs_path == result.output_dir / "outputs.jsonl"
     assert result.example_count == 2
+    assert result.attempted_count == 2
+    assert result.success_count == 2
+    assert result.error_count == 0
 
     snapshot = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
     assert snapshot == {
@@ -50,6 +57,8 @@ def test_run_evaluation_with_mock_llm_writes_config_snapshot_and_outputs(
     rows = _read_jsonl(result.outputs_path)
     assert [row["question_id"] for row in rows] == ["q0", "q1"]
     assert [row["response"] for row in rows] == ["answer 1", "answer 2"]
+    assert [row["status"] for row in rows] == ["success", "success"]
+    assert [row["error"] for row in rows] == [None, None]
     assert rows[0]["mode"] == "closed_book"
     assert rows[0]["prompt_id"] == "closed_book_v1"
     assert rows[0]["prompt_version"] == "v1"
@@ -98,6 +107,82 @@ def test_run_evaluation_limit_caps_examples_deterministically(tmp_path: Path) ->
     rows = _read_jsonl(result.outputs_path)
     assert result.example_count == 1
     assert [row["question_id"] for row in rows] == ["q0"]
+
+
+def test_run_evaluation_writes_each_output_before_next_generation(tmp_path: Path) -> None:
+    dataset_path = tmp_path / "examples.jsonl"
+    _write_processed_examples(dataset_path, count=2)
+    config = _run_config(
+        dataset_path=dataset_path,
+        output_dir=tmp_path / "runs",
+        mode=EvaluationMode.CLOSED_BOOK,
+        limit=2,
+        model_name="mock-model",
+    )
+
+    class InspectingLLM:
+        def __init__(self) -> None:
+            self.config = config.model
+            self.calls = 0
+
+        def generate(self, prompt: str) -> str:
+            self.calls += 1
+            outputs_path = tmp_path / "runs" / "streamed-run" / "outputs.jsonl"
+            if self.calls == 2:
+                rows = _read_jsonl(outputs_path)
+                assert [row["question_id"] for row in rows] == ["q0"]
+                assert rows[0]["status"] == "success"
+            return f"answer {self.calls}"
+
+    result = run_evaluation_from_config(
+        config,
+        InspectingLLM(),
+        run_id="streamed-run",
+    )
+
+    rows = _read_jsonl(result.outputs_path)
+    assert [row["question_id"] for row in rows] == ["q0", "q1"]
+    assert [row["response"] for row in rows] == ["answer 1", "answer 2"]
+
+
+def test_run_evaluation_records_llm_error_and_continues(tmp_path: Path) -> None:
+    dataset_path = tmp_path / "examples.jsonl"
+    _write_processed_examples(dataset_path, count=3)
+    config = _run_config(
+        dataset_path=dataset_path,
+        output_dir=tmp_path / "runs",
+        mode=EvaluationMode.CLOSED_BOOK,
+        limit=3,
+        model_name="mock-model",
+    )
+
+    class FailingOnceLLM:
+        def __init__(self) -> None:
+            self.config = config.model
+            self.calls = 0
+
+        def generate(self, prompt: str) -> str:
+            self.calls += 1
+            if self.calls == 2:
+                raise LLMProviderError("provider timeout")
+            return f"answer {self.calls}"
+
+    result = run_evaluation_from_config(
+        config,
+        FailingOnceLLM(),
+        run_id="error-run",
+    )
+
+    rows = _read_jsonl(result.outputs_path)
+    assert result.example_count == 3
+    assert result.attempted_count == 3
+    assert result.success_count == 2
+    assert result.error_count == 1
+    assert [row["status"] for row in rows] == ["success", "error", "success"]
+    assert rows[1]["question_id"] == "q1"
+    assert rows[1]["response"] == ""
+    assert rows[1]["error"] == "provider timeout"
+    assert rows[2]["question_id"] == "q2"
 
 
 def _run_config(

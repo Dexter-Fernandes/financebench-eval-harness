@@ -2,6 +2,7 @@ from pathlib import Path
 
 import json
 import pytest
+import yaml
 
 import financebench_eval_harness.data as data_module
 from financebench_eval_harness.cli import main
@@ -605,6 +606,12 @@ def test_run_eval_command_writes_mock_run_outputs(
                 "question": "What is revenue?",
                 "gold_answer": "$123.00",
                 "evidence": [{"evidence_text": "Revenue was $123."}],
+            },
+            {
+                "question_id": "q2",
+                "question": "What is gross profit?",
+                "gold_answer": "$456.00",
+                "evidence": [{"evidence_text": "Gross profit was $456."}],
             }
         ],
     )
@@ -617,7 +624,7 @@ def test_run_eval_command_writes_mock_run_outputs(
                 f"  dataset_path: {examples_path}",
                 f"  output_dir: {output_dir}",
                 "  mode: closed_book",
-                "  limit: 1",
+                "  limit: 2",
                 "model:",
                 "  provider: mock",
                 "  model_name: mock-llm",
@@ -629,7 +636,17 @@ def test_run_eval_command_writes_mock_run_outputs(
         encoding="utf-8",
     )
 
-    exit_code = main(["run-eval", "--config", str(config_path), "--run-id", "cli-run"])
+    exit_code = main(
+        [
+            "run-eval",
+            "--config",
+            str(config_path),
+            "--run-id",
+            "cli-run",
+            "--limit",
+            "1",
+        ]
+    )
 
     captured = capsys.readouterr()
     assert exit_code == 0
@@ -637,10 +654,17 @@ def test_run_eval_command_writes_mock_run_outputs(
     assert f"Evaluation run output: {run_dir}" in captured.out
     assert f"Wrote config snapshot to {run_dir / 'config.yaml'}" in captured.out
     assert f"Wrote 1 outputs to {run_dir / 'outputs.jsonl'}" in captured.out
+    assert "Attempted: 1" in captured.out
+    assert "Succeeded: 1" in captured.out
+    assert "Errors: 0" in captured.out
     assert captured.err == ""
+    snapshot = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    assert snapshot["eval"]["limit"] == 1
     rows = _read_jsonl(run_dir / "outputs.jsonl")
+    assert len(rows) == 1
     assert rows[0]["question_id"] == "q1"
     assert rows[0]["model_provider"] == "mock"
+    assert rows[0]["status"] == "success"
 
 
 def _write_valid_questions(path: Path) -> None:

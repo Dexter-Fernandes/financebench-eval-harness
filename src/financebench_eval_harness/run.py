@@ -9,12 +9,11 @@ from typing import Any
 
 import yaml
 
-from financebench_eval_harness.data_common import write_jsonl_records
 from financebench_eval_harness.evaluation import (
     load_evaluation_config,
     render_prompt_for_processed_example,
 )
-from financebench_eval_harness.llm import LLMClient
+from financebench_eval_harness.llm import LLMClient, LLMProviderError
 from financebench_eval_harness.run_config import EvaluationRunConfig
 
 
@@ -26,6 +25,9 @@ class EvaluationRunResult:
     config_path: Path
     outputs_path: Path
     example_count: int
+    attempted_count: int
+    success_count: int
+    error_count: int
 
 
 class EvaluationRunError(ValueError):
@@ -49,17 +51,29 @@ def run_evaluation_from_config(
         encoding="utf-8",
     )
 
+    outputs_path = output_dir / "outputs.jsonl"
     evaluation_config = load_evaluation_config()
-    output_rows: list[dict[str, str]] = []
-    for example in limited_examples:
-        rendered_prompt = render_prompt_for_processed_example(
-            evaluation_config,
-            config.settings.mode,
-            example,
-        )
-        response = llm_client.generate(rendered_prompt.text)
-        output_rows.append(
-            {
+    success_count = 0
+    error_count = 0
+    with outputs_path.open("w", encoding="utf-8") as outputs_file:
+        for example in limited_examples:
+            rendered_prompt = render_prompt_for_processed_example(
+                evaluation_config,
+                config.settings.mode,
+                example,
+            )
+            response = ""
+            status = "success"
+            error: str | None = None
+            try:
+                response = llm_client.generate(rendered_prompt.text)
+                success_count += 1
+            except LLMProviderError as exc:
+                status = "error"
+                error = str(exc)
+                error_count += 1
+
+            output_row = {
                 "question_id": _string_field(example, "question_id"),
                 "mode": rendered_prompt.mode.value,
                 "prompt_id": rendered_prompt.prompt_id,
@@ -69,17 +83,22 @@ def run_evaluation_from_config(
                 "prompt": rendered_prompt.text,
                 "response": response,
                 "gold_answer": _string_field(example, "gold_answer"),
+                "status": status,
+                "error": error,
             }
-        )
+            outputs_file.write(json.dumps(output_row, ensure_ascii=False) + "\n")
+            outputs_file.flush()
 
-    outputs_path = output_dir / "outputs.jsonl"
-    write_jsonl_records(outputs_path, output_rows)
+    attempted_count = len(limited_examples)
 
     return EvaluationRunResult(
         output_dir=output_dir,
         config_path=config_path,
         outputs_path=outputs_path,
-        example_count=len(output_rows),
+        example_count=attempted_count,
+        attempted_count=attempted_count,
+        success_count=success_count,
+        error_count=error_count,
     )
 
 

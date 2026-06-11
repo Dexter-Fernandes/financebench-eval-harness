@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -107,6 +108,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--run-id",
         default=None,
         help="Optional deterministic run directory name.",
+    )
+    run_eval_parser.add_argument(
+        "--limit",
+        type=_positive_int,
+        default=None,
+        help="Override the configured example limit for smoke tests.",
     )
 
     return parser
@@ -245,6 +252,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "run-eval":
         try:
             run_config = load_evaluation_run_config(args.config)
+            if args.limit is not None:
+                run_config = replace(
+                    run_config,
+                    settings=replace(run_config.settings, limit=args.limit),
+                )
             llm_client = _build_llm_client(run_config)
             result = run_evaluation_from_config(
                 run_config,
@@ -262,6 +274,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Evaluation run output: {result.output_dir}")
         print(f"Wrote config snapshot to {result.config_path}")
         print(f"Wrote {result.example_count} outputs to {result.outputs_path}")
+        print(f"Attempted: {result.attempted_count}")
+        print(f"Succeeded: {result.success_count}")
+        print(f"Errors: {result.error_count}")
         return 0
 
     parser.error(f"Unknown command: {args.command}")
@@ -298,6 +313,16 @@ def _build_llm_client(run_config) -> LLMClient:
     if run_config.model.provider == "ollama":
         return OllamaClient(run_config.model)
     raise LLMConfigError(f"Unsupported LLM provider: {run_config.model.provider}")
+
+
+def _positive_int(value: str) -> int:
+    try:
+        parsed_value = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive integer") from exc
+    if parsed_value <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed_value
 
 
 def _format_evidence_page_check(check: EvidencePageCheck) -> str:
