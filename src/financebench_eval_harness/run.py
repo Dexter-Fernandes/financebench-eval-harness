@@ -14,6 +14,12 @@ from financebench_eval_harness.evaluation import (
     load_evaluation_config,
     render_prompt_for_processed_example,
 )
+from financebench_eval_harness.judge import (
+    JudgeError,
+    parse_judge_response,
+    render_judge_prompt_for_processed_example,
+    summarize_judges,
+)
 from financebench_eval_harness.llm import LLMClient, LLMProviderError
 from financebench_eval_harness.run_config import EvaluationRunConfig
 from financebench_eval_harness.scoring import score_prediction, summarize_scores
@@ -27,6 +33,7 @@ class EvaluationRunResult:
     config_path: Path
     outputs_path: Path
     run_metadata_path: Path
+    judge_failures_path: Path
     example_count: int
     attempted_count: int
     success_count: int
@@ -41,8 +48,12 @@ def run_evaluation_from_config(
     config: EvaluationRunConfig,
     llm_client: LLMClient,
     *,
+    judge_client: LLMClient | None = None,
     run_id: str | None = None,
 ) -> EvaluationRunResult:
+    if config.judge is not None and judge_client is None:
+        raise EvaluationRunError("Judge client is required when judge scoring is enabled")
+
     examples = _load_processed_examples_from_path(config.settings.dataset_path)
     limited_examples = examples[: config.settings.limit]
     resolved_run_id = run_id or _timestamp_run_id()
@@ -58,10 +69,13 @@ def run_evaluation_from_config(
 
     outputs_path = output_dir / "outputs.jsonl"
     run_metadata_path = output_dir / "run_metadata.json"
+    judge_failures_path = output_dir / "judge_failures.jsonl"
     evaluation_config = load_evaluation_config()
     success_count = 0
     error_count = 0
     scores: list[dict[str, object]] = []
+    judge_rows: list[dict[str, object]] = []
+    judge_failures: list[dict[str, object]] = []
     with outputs_path.open("w", encoding="utf-8") as outputs_file:
         for example in limited_examples:
             rendered_prompt = render_prompt_for_processed_example(
@@ -85,6 +99,28 @@ def run_evaluation_from_config(
             gold_answer = _string_field(example, "gold_answer")
             score = score_prediction(gold_answer, prediction)
             scores.append(score)
+            judge_row: dict[str, object] | None = None
+            if config.judge is not None and judge_client is not None:
+                judge_row = _score_with_judge(
+                    config=config,
+                    judge_client=judge_client,
+                    example=example,
+                    prediction=prediction,
+                )
+                judge_rows.append(judge_row)
+                if judge_row["status"] == "error":
+                    judge_failures.append(
+                        {
+                            "question_id": _string_field(example, "question_id"),
+                            "error": judge_row["error"],
+                            "raw_response": judge_row["raw_response"],
+                            "model_provider": judge_row["model_provider"],
+                            "model_name": judge_row["model_name"],
+                            "prompt_id": judge_row["prompt_id"],
+                            "prompt_version": judge_row["prompt_version"],
+                            "prompt_template_path": judge_row["prompt_template_path"],
+                        }
+                    )
 
             output_row = {
                 "question_id": _string_field(example, "question_id"),
@@ -104,10 +140,21 @@ def run_evaluation_from_config(
                 "error": error,
                 "scores": score,
             }
+            if judge_row is not None:
+                output_row["judge"] = judge_row
             outputs_file.write(json.dumps(output_row, ensure_ascii=False) + "\n")
             outputs_file.flush()
 
     attempted_count = len(limited_examples)
+    if judge_failures:
+        judge_failures_path.write_text(
+            "\n".join(json.dumps(row, ensure_ascii=False) for row in judge_failures)
+            + "\n",
+            encoding="utf-8",
+        )
+    elif judge_failures_path.exists():
+        judge_failures_path.unlink()
+
     duration_ms = int(round((perf_counter() - run_started_at) * 1000))
     run_metadata = {
         "run_id": resolved_run_id,
@@ -127,6 +174,9 @@ def run_evaluation_from_config(
         "success_count": success_count,
         "error_count": error_count,
         "score_summary": summarize_scores(scores),
+        "judge": _judge_metadata(config),
+        "judge_failures_path": str(judge_failures_path),
+        "judge_summary": summarize_judges(judge_rows),
     }
     run_metadata_path.write_text(
         json.dumps(run_metadata, indent=2, ensure_ascii=False) + "\n",
@@ -138,11 +188,72 @@ def run_evaluation_from_config(
         config_path=config_path,
         outputs_path=outputs_path,
         run_metadata_path=run_metadata_path,
+        judge_failures_path=judge_failures_path,
         example_count=attempted_count,
         attempted_count=attempted_count,
         success_count=success_count,
         error_count=error_count,
     )
+
+
+def _score_with_judge(
+    *,
+    config: EvaluationRunConfig,
+    judge_client: LLMClient,
+    example: dict[str, Any],
+    prediction: str,
+) -> dict[str, object]:
+    assert config.judge is not None
+    raw_response: str | None = None
+    verdict: str | None = None
+    reason: str | None = None
+    status = "success"
+    error: str | None = None
+    started_at = perf_counter()
+    try:
+        rendered_prompt = render_judge_prompt_for_processed_example(
+            config.judge.prompt,
+            example,
+            prediction=prediction,
+        )
+        raw_response = judge_client.generate(rendered_prompt.text)
+        parsed_response = parse_judge_response(raw_response)
+        verdict = parsed_response["verdict"]
+        reason = parsed_response["reason"]
+    except (JudgeError, LLMProviderError) as exc:
+        status = "error"
+        error = str(exc)
+
+    latency_ms = int(round((perf_counter() - started_at) * 1000))
+    return {
+        "status": status,
+        "verdict": verdict,
+        "reason": reason,
+        "error": error,
+        "raw_response": raw_response,
+        "model_provider": config.judge.model.provider,
+        "model_name": config.judge.model.model_name,
+        "prompt_id": config.judge.prompt.id,
+        "prompt_version": config.judge.prompt.version,
+        "prompt_template_path": str(config.judge.prompt.template_path),
+        "latency_ms": latency_ms,
+    }
+
+
+def _judge_metadata(config: EvaluationRunConfig) -> dict[str, object]:
+    if config.judge is None:
+        return {"enabled": False}
+    return {
+        "enabled": True,
+        "provider": config.judge.model.provider,
+        "model_name": config.judge.model.model_name,
+        "temperature": config.judge.model.temperature,
+        "max_tokens": config.judge.model.max_tokens,
+        "timeout_seconds": config.judge.model.timeout_seconds,
+        "prompt_id": config.judge.prompt.id,
+        "prompt_version": config.judge.prompt.version,
+        "prompt_template_path": str(config.judge.prompt.template_path),
+    }
 
 
 def _load_processed_examples_from_path(path: Path) -> list[dict[str, Any]]:

@@ -631,6 +631,17 @@ def test_run_eval_command_writes_mock_run_outputs(
                 "  temperature: 0.0",
                 "  max_tokens: 512",
                 "  timeout_seconds: 30",
+                "judge:",
+                "  enabled: true",
+                "  provider: mock",
+                "  model_name: mock-judge",
+                "  temperature: 0.0",
+                "  max_tokens: 256",
+                "  timeout_seconds: 30",
+                "  prompt:",
+                "    id: answer_correctness_v1",
+                "    version: v1",
+                "    template_path: prompts/judges/answer_correctness_v1.txt",
             ]
         ),
         encoding="utf-8",
@@ -658,6 +669,9 @@ def test_run_eval_command_writes_mock_run_outputs(
     assert "Attempted: 1" in captured.out
     assert "Succeeded: 1" in captured.out
     assert "Errors: 0" in captured.out
+    assert "Judge attempted: 1" in captured.out
+    assert "Judge succeeded: 1" in captured.out
+    assert "Judge errors: 0" in captured.out
     assert captured.err == ""
     snapshot = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
     assert snapshot["eval"]["limit"] == 1
@@ -674,6 +688,9 @@ def test_run_eval_command_writes_mock_run_outputs(
     assert rows[0]["status"] == "success"
     assert rows[0]["scores"]["contains_gold_answer"] is False
     assert rows[0]["scores"]["numeric_match"] is False
+    assert rows[0]["judge"]["status"] == "success"
+    assert rows[0]["judge"]["verdict"] == "incorrect"
+    assert rows[0]["judge"]["model_name"] == "mock-judge"
     assert "response" not in rows[0]
     run_metadata = json.loads((run_dir / "run_metadata.json").read_text(encoding="utf-8"))
     assert run_metadata["output_filename"] == "outputs.jsonl"
@@ -682,6 +699,10 @@ def test_run_eval_command_writes_mock_run_outputs(
     assert run_metadata["error_count"] == 0
     assert run_metadata["score_summary"]["example_count"] == 1
     assert run_metadata["score_summary"]["numeric_match_count"] == 0
+    assert run_metadata["judge"]["enabled"] is True
+    assert run_metadata["judge_summary"]["attempted_count"] == 1
+    assert run_metadata["judge_summary"]["success_count"] == 1
+    assert run_metadata["judge_summary"]["error_count"] == 0
 
 
 def _write_valid_questions(path: Path) -> None:

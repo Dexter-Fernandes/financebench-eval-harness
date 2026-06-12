@@ -19,6 +19,8 @@ REQUIRED_MODEL_KEYS = {
     "max_tokens",
     "timeout_seconds",
 }
+REQUIRED_JUDGE_KEYS = REQUIRED_MODEL_KEYS | {"enabled", "prompt"}
+REQUIRED_JUDGE_PROMPT_KEYS = {"id", "version", "template_path"}
 
 
 @dataclass(frozen=True)
@@ -32,14 +34,33 @@ class EvaluationRunSettings:
 
 
 @dataclass(frozen=True)
+class JudgePromptConfig:
+    """Versioned prompt file used for LLM-as-judge scoring."""
+
+    id: str
+    version: str
+    template_path: Path
+
+
+@dataclass(frozen=True)
+class JudgeConfig:
+    """Optional LLM-as-judge configuration for one run."""
+
+    enabled: bool
+    model: LLMGenerationConfig
+    prompt: JudgePromptConfig
+
+
+@dataclass(frozen=True)
 class EvaluationRunConfig:
     """Full reproducible evaluation run configuration."""
 
     settings: EvaluationRunSettings
     model: LLMGenerationConfig
+    judge: JudgeConfig | None = None
 
-    def to_dict(self) -> dict[str, dict[str, str | int | float]]:
-        return {
+    def to_dict(self) -> dict[str, Any]:
+        config: dict[str, Any] = {
             "eval": {
                 "dataset_path": str(self.settings.dataset_path),
                 "output_dir": str(self.settings.output_dir),
@@ -54,6 +75,21 @@ class EvaluationRunConfig:
                 "timeout_seconds": self.model.timeout_seconds,
             },
         }
+        if self.judge is not None:
+            config["judge"] = {
+                "enabled": self.judge.enabled,
+                "provider": self.judge.model.provider,
+                "model_name": self.judge.model.model_name,
+                "temperature": self.judge.model.temperature,
+                "max_tokens": self.judge.model.max_tokens,
+                "timeout_seconds": self.judge.model.timeout_seconds,
+                "prompt": {
+                    "id": self.judge.prompt.id,
+                    "version": self.judge.prompt.version,
+                    "template_path": str(self.judge.prompt.template_path),
+                },
+            }
+        return config
 
 
 class EvaluationRunConfigError(ValueError):
@@ -93,6 +129,8 @@ def load_evaluation_run_config(
     _validate_required_eval_keys(eval_config)
     _validate_required_model_keys(model_config)
 
+    judge_config = _judge_config_from_mapping(raw_config.get("judge"))
+
     return EvaluationRunConfig(
         settings=EvaluationRunSettings(
             dataset_path=_path_from_mapping(eval_config, "dataset_path"),
@@ -110,6 +148,7 @@ def load_evaluation_run_config(
                 "timeout_seconds",
             ),
         ),
+        judge=judge_config,
     )
 
 
@@ -129,6 +168,62 @@ def _validate_required_model_keys(model_config: dict[str, Any]) -> None:
         raise EvaluationRunConfigError(
             f"Evaluation run config missing required model key(s): {missing}"
         )
+
+
+def _judge_config_from_mapping(raw_judge_config: Any) -> JudgeConfig | None:
+    if raw_judge_config is None:
+        return None
+    if not isinstance(raw_judge_config, dict):
+        raise EvaluationRunConfigError(
+            "Evaluation run config key 'judge' must be a mapping"
+        )
+
+    enabled = raw_judge_config.get("enabled")
+    if type(enabled) is not bool:
+        raise EvaluationRunConfigError(
+            "Evaluation run config key 'judge.enabled' must be a boolean"
+        )
+    if not enabled:
+        return None
+
+    missing_keys = sorted(REQUIRED_JUDGE_KEYS - raw_judge_config.keys())
+    if missing_keys:
+        missing = ", ".join(missing_keys)
+        raise EvaluationRunConfigError(
+            f"Evaluation run config missing required judge key(s): {missing}"
+        )
+
+    prompt_config = raw_judge_config["prompt"]
+    if not isinstance(prompt_config, dict):
+        raise EvaluationRunConfigError(
+            "Evaluation run config key 'judge.prompt' must be a mapping"
+        )
+
+    missing_prompt_keys = sorted(REQUIRED_JUDGE_PROMPT_KEYS - prompt_config.keys())
+    if missing_prompt_keys:
+        missing = ", ".join(missing_prompt_keys)
+        raise EvaluationRunConfigError(
+            f"Evaluation run config missing required judge prompt key(s): {missing}"
+        )
+
+    return JudgeConfig(
+        enabled=True,
+        model=LLMGenerationConfig(
+            provider=_string_from_mapping(raw_judge_config, "provider"),
+            model_name=_string_from_mapping(raw_judge_config, "model_name"),
+            temperature=_float_from_mapping(raw_judge_config, "temperature"),
+            max_tokens=_positive_int_from_mapping(raw_judge_config, "max_tokens"),
+            timeout_seconds=_positive_float_from_mapping(
+                raw_judge_config,
+                "timeout_seconds",
+            ),
+        ),
+        prompt=JudgePromptConfig(
+            id=_string_from_mapping(prompt_config, "id"),
+            version=_string_from_mapping(prompt_config, "version"),
+            template_path=_path_from_mapping(prompt_config, "template_path"),
+        ),
+    )
 
 
 def _mode_from_mapping(config: dict[str, Any]) -> EvaluationMode:
@@ -184,5 +279,7 @@ __all__ = [
     "EvaluationRunConfig",
     "EvaluationRunConfigError",
     "EvaluationRunSettings",
+    "JudgeConfig",
+    "JudgePromptConfig",
     "load_evaluation_run_config",
 ]

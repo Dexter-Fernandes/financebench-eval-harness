@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from dataclasses import replace
 import sys
 from pathlib import Path
@@ -258,9 +259,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     settings=replace(run_config.settings, limit=args.limit),
                 )
             llm_client = _build_llm_client(run_config)
+            judge_client = _build_judge_client(run_config)
             result = run_evaluation_from_config(
                 run_config,
                 llm_client,
+                judge_client=judge_client,
                 run_id=args.run_id,
             )
         except (
@@ -278,6 +281,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Attempted: {result.attempted_count}")
         print(f"Succeeded: {result.success_count}")
         print(f"Errors: {result.error_count}")
+        run_metadata = json.loads(result.run_metadata_path.read_text(encoding="utf-8"))
+        judge_summary = run_metadata["judge_summary"]
+        print(f"Judge attempted: {judge_summary['attempted_count']}")
+        print(f"Judge succeeded: {judge_summary['success_count']}")
+        print(f"Judge errors: {judge_summary['error_count']}")
         return 0
 
     parser.error(f"Unknown command: {args.command}")
@@ -314,6 +322,24 @@ def _build_llm_client(run_config) -> LLMClient:
     if run_config.model.provider == "ollama":
         return OllamaClient(run_config.model)
     raise LLMConfigError(f"Unsupported LLM provider: {run_config.model.provider}")
+
+
+def _build_judge_client(run_config) -> LLMClient | None:
+    if run_config.judge is None:
+        return None
+    if run_config.judge.model.provider == "mock":
+        return MockLLMClient(
+            run_config.judge.model,
+            responses=[
+                '{"verdict": "incorrect", "reason": "Mock judge response."}'
+            ]
+            * run_config.settings.limit,
+        )
+    if run_config.judge.model.provider == "ollama":
+        return OllamaClient(run_config.judge.model)
+    raise LLMConfigError(
+        f"Unsupported judge LLM provider: {run_config.judge.model.provider}"
+    )
 
 
 def _positive_int(value: str) -> int:
