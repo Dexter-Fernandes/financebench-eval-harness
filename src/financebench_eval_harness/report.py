@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from json import JSONDecodeError
-from pathlib import Path
 import re
+from pathlib import Path
 from typing import Any
 
 
@@ -26,10 +26,11 @@ def generate_baseline_report(
     run_dir: str | Path,
     *,
     output_dir: str | Path = DEFAULT_REPORT_OUTPUT_DIR,
+    report_filename: str | None = None,
 ) -> BaselineReportResult:
     resolved_run_dir = Path(run_dir)
     metadata = _load_run_metadata(resolved_run_dir)
-    rows = _load_output_rows(resolved_run_dir)
+    rows = _load_report_rows(resolved_run_dir)
     judge_summary = _judge_summary_from_metadata(metadata)
 
     mode = _metadata_string(metadata, "mode")
@@ -37,7 +38,9 @@ def generate_baseline_report(
     model_name = _metadata_string(metadata, "model_name")
     report_dir = Path(output_dir)
     report_dir.mkdir(parents=True, exist_ok=True)
-    report_path = report_dir / f"baseline_{_slug(mode)}_{_slug(model_name)}.md"
+    report_path = report_dir / (
+        report_filename or f"baseline_{_slug(mode)}_{_slug(model_name)}.md"
+    )
 
     report_path.write_text(
         _render_markdown_report(
@@ -76,16 +79,50 @@ def _load_run_metadata(run_dir: Path) -> dict[str, Any]:
     return metadata
 
 
-def _load_output_rows(run_dir: Path) -> list[dict[str, Any]]:
+def _load_report_rows(run_dir: Path) -> list[dict[str, Any]]:
+    predictions_path = run_dir / "predictions.jsonl"
+    scores_path = run_dir / "scores.jsonl"
+    if predictions_path.is_file() and scores_path.is_file():
+        predictions = _load_jsonl(predictions_path, "prediction")
+        score_rows = _load_jsonl(scores_path, "score")
+        scores_by_id = {
+            row.get("question_id"): row
+            for row in score_rows
+            if isinstance(row.get("question_id"), str)
+        }
+        rows: list[dict[str, Any]] = []
+        for prediction in predictions:
+            question_id = prediction.get("question_id")
+            score_row = scores_by_id.get(question_id)
+            if score_row is None:
+                raise BaselineReportError(
+                    f"Baseline report score row not found for question_id: {question_id}"
+                )
+            rows.append(
+                {
+                    **prediction,
+                    "scores": score_row.get("scores"),
+                    "judge": score_row.get("judge"),
+                }
+            )
+        return rows
+
     outputs_path = run_dir / "outputs.jsonl"
-    if not outputs_path.is_file():
+    if outputs_path.is_file():
+        return _load_jsonl(outputs_path, "output")
+
+    if not predictions_path.is_file():
         raise BaselineReportError(
-            f"Baseline report outputs file not found: {outputs_path}"
+            f"Baseline report predictions file not found: {predictions_path}"
         )
+    raise BaselineReportError(f"Baseline report scores file not found: {scores_path}")
+
+
+def _load_jsonl(path: Path, row_name: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     try:
         for line_number, line in enumerate(
-            outputs_path.read_text(encoding="utf-8").splitlines(),
+            path.read_text(encoding="utf-8").splitlines(),
             start=1,
         ):
             if not line.strip():
@@ -93,12 +130,12 @@ def _load_output_rows(run_dir: Path) -> list[dict[str, Any]]:
             row = json.loads(line)
             if not isinstance(row, dict):
                 raise BaselineReportError(
-                    f"Baseline report output row must be an object at line {line_number}"
+                    f"Baseline report {row_name} row must be an object at line {line_number}"
                 )
             rows.append(row)
     except JSONDecodeError as exc:
         raise BaselineReportError(
-            f"Baseline report outputs file was not valid JSONL at line {line_number}"
+            f"Baseline report {row_name} file was not valid JSONL at line {line_number}"
         ) from exc
     return rows
 

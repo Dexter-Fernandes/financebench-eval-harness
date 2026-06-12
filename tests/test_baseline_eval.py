@@ -57,7 +57,8 @@ def test_baseline_eval_loop_writes_predictions_scores_and_report(tmp_path: Path)
         run_id="smoke-run",
     )
 
-    rows = _read_jsonl(run_result.outputs_path)
+    rows = _read_jsonl(run_result.predictions_path)
+    score_rows = _read_jsonl(run_result.scores_path)
     assert run_result.example_count == 1
     assert len(rows) == 1
     assert rows[0]["question_id"] == "financebench_smoke_001"
@@ -68,10 +69,10 @@ def test_baseline_eval_loop_writes_predictions_scores_and_report(tmp_path: Path)
     assert rows[0]["prompt_id"] == "closed_book_v1"
     assert rows[0]["model_provider"] == "mock"
     assert rows[0]["model_name"] == "mock-model"
-    assert rows[0]["scores"]["exact_match"] is True
-    assert rows[0]["scores"]["numeric_match"] is True
-    assert rows[0]["judge"]["status"] == "success"
-    assert rows[0]["judge"]["verdict"] == "correct"
+    assert score_rows[0]["scores"]["exact_match"] is True
+    assert score_rows[0]["scores"]["numeric_match"] is True
+    assert score_rows[0]["judge"]["status"] == "success"
+    assert score_rows[0]["judge"]["verdict"] == "correct"
 
     run_metadata = json.loads(run_result.run_metadata_path.read_text(encoding="utf-8"))
     assert run_metadata["judge_summary"]["correct_count"] == 1

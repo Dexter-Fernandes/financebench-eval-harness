@@ -123,14 +123,18 @@ model name, temperature, max tokens, and timeout settings. Tests can use
 
 ## Run A Mock Evaluation
 
-Use `configs/evaluation/local_mock.yaml` for a deterministic local run that
-renders prompts and writes mock LLM responses without calling an external API:
+Use `configs/baseline_closed_book.yaml` for a deterministic local baseline run
+that renders prompts, writes mock LLM responses, scores the predictions, and
+creates a Markdown report without calling an external API:
 
 ```bash
-financebench-harness run-eval --config configs/evaluation/local_mock.yaml
+python -m financebench_eval run-baseline --config configs/baseline_closed_book.yaml
 ```
 
 Each run writes a directory under `runs/` containing `config.yaml`, the
-normalized config snapshot used for reproducibility, and `outputs.jsonl`, one
-record per evaluated example. Change `eval.mode`, `eval.limit`, or the `model`
-settings in the YAML file to compare configurations without editing code.
+normalized config snapshot used for reproducibility, `predictions.jsonl` with
+one model prediction per evaluated example, `scores.jsonl` with automatic and
+judge scores, and `run_metadata.json` with run-level settings and counts. The
+baseline command also writes `reports/baseline_<run_id>.md`. Change
+`eval.mode`, `eval.limit`, or the `model` settings in the YAML file to compare
+configurations without editing code.

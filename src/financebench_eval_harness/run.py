@@ -31,13 +31,23 @@ class EvaluationRunResult:
 
     output_dir: Path
     config_path: Path
-    outputs_path: Path
+    predictions_path: Path
+    scores_path: Path
     run_metadata_path: Path
     judge_failures_path: Path
     example_count: int
     attempted_count: int
     success_count: int
     error_count: int
+
+    @property
+    def outputs_path(self) -> Path:
+        """Backward-compatible alias for older callers.
+
+        The canonical M2 output file is now predictions.jsonl.
+        """
+
+        return self.predictions_path
 
 
 class EvaluationRunError(ValueError):
@@ -67,7 +77,8 @@ def run_evaluation_from_config(
         encoding="utf-8",
     )
 
-    outputs_path = output_dir / "outputs.jsonl"
+    predictions_path = output_dir / "predictions.jsonl"
+    scores_path = output_dir / "scores.jsonl"
     run_metadata_path = output_dir / "run_metadata.json"
     judge_failures_path = output_dir / "judge_failures.jsonl"
     evaluation_config = load_evaluation_config()
@@ -76,7 +87,10 @@ def run_evaluation_from_config(
     scores: list[dict[str, object]] = []
     judge_rows: list[dict[str, object]] = []
     judge_failures: list[dict[str, object]] = []
-    with outputs_path.open("w", encoding="utf-8") as outputs_file:
+    with (
+        predictions_path.open("w", encoding="utf-8") as predictions_file,
+        scores_path.open("w", encoding="utf-8") as scores_file,
+    ):
         for example in limited_examples:
             rendered_prompt = render_prompt_for_processed_example(
                 evaluation_config,
@@ -122,8 +136,9 @@ def run_evaluation_from_config(
                         }
                     )
 
-            output_row = {
-                "question_id": _string_field(example, "question_id"),
+            question_id = _string_field(example, "question_id")
+            prediction_row = {
+                "question_id": question_id,
                 "question": question,
                 "gold_answer": gold_answer,
                 "prediction": prediction,
@@ -138,12 +153,18 @@ def run_evaluation_from_config(
                 "output_tokens": None,
                 "status": status,
                 "error": error,
-                "scores": score,
             }
-            if judge_row is not None:
-                output_row["judge"] = judge_row
-            outputs_file.write(json.dumps(output_row, ensure_ascii=False) + "\n")
-            outputs_file.flush()
+            score_row = {
+                "question_id": question_id,
+                "scores": score,
+                "judge": judge_row,
+                "status": status,
+                "error": error,
+            }
+            predictions_file.write(json.dumps(prediction_row, ensure_ascii=False) + "\n")
+            predictions_file.flush()
+            scores_file.write(json.dumps(score_row, ensure_ascii=False) + "\n")
+            scores_file.flush()
 
     attempted_count = len(limited_examples)
     if judge_failures:
@@ -167,8 +188,10 @@ def run_evaluation_from_config(
         "temperature": config.model.temperature,
         "max_tokens": config.model.max_tokens,
         "timeout_seconds": config.model.timeout_seconds,
-        "outputs_path": str(outputs_path),
-        "output_filename": outputs_path.name,
+        "predictions_path": str(predictions_path),
+        "scores_path": str(scores_path),
+        "prediction_filename": predictions_path.name,
+        "scores_filename": scores_path.name,
         "duration_ms": duration_ms,
         "attempted_count": attempted_count,
         "success_count": success_count,
@@ -186,7 +209,8 @@ def run_evaluation_from_config(
     return EvaluationRunResult(
         output_dir=output_dir,
         config_path=config_path,
-        outputs_path=outputs_path,
+        predictions_path=predictions_path,
+        scores_path=scores_path,
         run_metadata_path=run_metadata_path,
         judge_failures_path=judge_failures_path,
         example_count=attempted_count,

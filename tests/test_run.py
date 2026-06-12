@@ -14,7 +14,7 @@ from financebench_eval_harness.run_config import EvaluationRunConfig, Evaluation
 from financebench_eval_harness.run_config import JudgeConfig, JudgePromptConfig
 
 
-def test_run_evaluation_with_mock_llm_writes_config_snapshot_and_outputs(
+def test_run_evaluation_with_mock_llm_writes_config_snapshot_predictions_and_scores(
     tmp_path: Path,
 ) -> None:
     dataset_path = tmp_path / "examples.jsonl"
@@ -32,7 +32,9 @@ def test_run_evaluation_with_mock_llm_writes_config_snapshot_and_outputs(
 
     assert result.output_dir == tmp_path / "runs" / "fixed-run"
     assert result.config_path == result.output_dir / "config.yaml"
-    assert result.outputs_path == result.output_dir / "outputs.jsonl"
+    assert result.predictions_path == result.output_dir / "predictions.jsonl"
+    assert result.scores_path == result.output_dir / "scores.jsonl"
+    assert not (result.output_dir / "outputs.jsonl").exists()
     assert result.run_metadata_path == result.output_dir / "run_metadata.json"
     assert result.example_count == 2
     assert result.attempted_count == 2
@@ -56,7 +58,8 @@ def test_run_evaluation_with_mock_llm_writes_config_snapshot_and_outputs(
         },
     }
 
-    rows = _read_jsonl(result.outputs_path)
+    rows = _read_jsonl(result.predictions_path)
+    score_rows = _read_jsonl(result.scores_path)
     assert [row["question_id"] for row in rows] == ["q0", "q1"]
     assert [row["question"] for row in rows] == ["Question 0?", "Question 1?"]
     assert [row["prediction"] for row in rows] == ["answer 1", "answer 2"]
@@ -72,13 +75,27 @@ def test_run_evaluation_with_mock_llm_writes_config_snapshot_and_outputs(
     assert rows[0]["latency_ms"] >= 0
     assert rows[0]["input_tokens"] is None
     assert rows[0]["output_tokens"] is None
-    assert rows[0]["scores"] == {
+    assert score_rows[0] == {
+        "question_id": "q0",
+        "scores": {
+            "exact_match": False,
+            "normalized_string_match": False,
+            "contains_gold_answer": False,
+            "numeric_match": False,
+            "gold_numeric_values": [0.0],
+            "prediction_numeric_values": [1.0],
+        },
+        "judge": None,
+        "status": "success",
+        "error": None,
+    }
+    assert score_rows[1]["scores"] == {
         "exact_match": False,
         "normalized_string_match": False,
         "contains_gold_answer": False,
         "numeric_match": False,
-        "gold_numeric_values": [0.0],
-        "prediction_numeric_values": [1.0],
+        "gold_numeric_values": [1.0],
+        "prediction_numeric_values": [2.0],
     }
     assert "Question 0?" in rows[0]["prompt"]
     assert rows[0]["gold_answer"] == "Gold answer 0"
@@ -95,8 +112,10 @@ def test_run_evaluation_with_mock_llm_writes_config_snapshot_and_outputs(
     assert run_metadata["temperature"] == 0.0
     assert run_metadata["max_tokens"] == 512
     assert run_metadata["timeout_seconds"] == 30.0
-    assert run_metadata["outputs_path"] == str(result.outputs_path)
-    assert run_metadata["output_filename"] == "outputs.jsonl"
+    assert run_metadata["predictions_path"] == str(result.predictions_path)
+    assert run_metadata["scores_path"] == str(result.scores_path)
+    assert run_metadata["prediction_filename"] == "predictions.jsonl"
+    assert run_metadata["scores_filename"] == "scores.jsonl"
     assert isinstance(run_metadata["duration_ms"], int)
     assert run_metadata["duration_ms"] >= 0
     assert run_metadata["attempted_count"] == 2
@@ -129,7 +148,7 @@ def test_run_evaluation_config_changes_mode_and_model_metadata(tmp_path: Path) -
 
     result = run_evaluation_from_config(config, llm_client, run_id="oracle-run")
 
-    rows = _read_jsonl(result.outputs_path)
+    rows = _read_jsonl(result.predictions_path)
     assert rows[0]["mode"] == "oracle_context"
     assert rows[0]["prompt_id"] == "oracle_context_v1"
     assert rows[0]["model_name"] == "changed-model"
@@ -150,7 +169,7 @@ def test_run_evaluation_limit_caps_examples_deterministically(tmp_path: Path) ->
 
     result = run_evaluation_from_config(config, llm_client, run_id="limited-run")
 
-    rows = _read_jsonl(result.outputs_path)
+    rows = _read_jsonl(result.predictions_path)
     assert result.example_count == 1
     assert [row["question_id"] for row in rows] == ["q0"]
 
@@ -173,9 +192,9 @@ def test_run_evaluation_writes_each_output_before_next_generation(tmp_path: Path
 
         def generate(self, prompt: str) -> str:
             self.calls += 1
-            outputs_path = tmp_path / "runs" / "streamed-run" / "outputs.jsonl"
+            predictions_path = tmp_path / "runs" / "streamed-run" / "predictions.jsonl"
             if self.calls == 2:
-                rows = _read_jsonl(outputs_path)
+                rows = _read_jsonl(predictions_path)
                 assert [row["question_id"] for row in rows] == ["q0"]
                 assert rows[0]["status"] == "success"
             return f"answer {self.calls}"
@@ -186,7 +205,7 @@ def test_run_evaluation_writes_each_output_before_next_generation(tmp_path: Path
         run_id="streamed-run",
     )
 
-    rows = _read_jsonl(result.outputs_path)
+    rows = _read_jsonl(result.predictions_path)
     assert [row["question_id"] for row in rows] == ["q0", "q1"]
     assert [row["prediction"] for row in rows] == ["answer 1", "answer 2"]
 
@@ -219,7 +238,8 @@ def test_run_evaluation_records_llm_error_and_continues(tmp_path: Path) -> None:
         run_id="error-run",
     )
 
-    rows = _read_jsonl(result.outputs_path)
+    rows = _read_jsonl(result.predictions_path)
+    score_rows = _read_jsonl(result.scores_path)
     assert result.example_count == 3
     assert result.attempted_count == 3
     assert result.success_count == 2
@@ -233,8 +253,8 @@ def test_run_evaluation_records_llm_error_and_continues(tmp_path: Path) -> None:
     assert rows[1]["latency_ms"] >= 0
     assert rows[1]["input_tokens"] is None
     assert rows[1]["output_tokens"] is None
-    assert rows[1]["scores"]["exact_match"] is False
-    assert rows[1]["scores"]["numeric_match"] is False
+    assert score_rows[1]["scores"]["exact_match"] is False
+    assert score_rows[1]["scores"]["numeric_match"] is False
     assert rows[2]["question_id"] == "q2"
 
 
@@ -263,8 +283,10 @@ def test_run_evaluation_attaches_successful_judge_result(tmp_path: Path) -> None
         run_id="judge-run",
     )
 
-    rows = _read_jsonl(result.outputs_path)
-    assert rows[0]["judge"] == {
+    rows = _read_jsonl(result.predictions_path)
+    score_rows = _read_jsonl(result.scores_path)
+    assert "judge" not in rows[0]
+    assert score_rows[0]["judge"] == {
         "status": "success",
         "verdict": "correct",
         "reason": "Matches the gold answer.",
@@ -275,9 +297,9 @@ def test_run_evaluation_attaches_successful_judge_result(tmp_path: Path) -> None
         "prompt_id": "answer_correctness_v1",
         "prompt_version": "v1",
         "prompt_template_path": str(prompt_path),
-        "latency_ms": rows[0]["judge"]["latency_ms"],
+        "latency_ms": score_rows[0]["judge"]["latency_ms"],
     }
-    assert rows[0]["judge"]["latency_ms"] >= 0
+    assert score_rows[0]["judge"]["latency_ms"] >= 0
     assert "Question 0?" in judge_client.calls[0]
     assert "Gold answer 0" in judge_client.calls[0]
     assert "[Evidence 1]\nEvidence 0" in judge_client.calls[0]
@@ -333,19 +355,20 @@ def test_run_evaluation_logs_invalid_judge_output_and_continues(tmp_path: Path) 
         run_id="judge-error-run",
     )
 
-    rows = _read_jsonl(result.outputs_path)
+    rows = _read_jsonl(result.predictions_path)
+    score_rows = _read_jsonl(result.scores_path)
     assert rows[0]["status"] == "success"
-    assert rows[0]["judge"]["status"] == "error"
-    assert rows[0]["judge"]["verdict"] is None
-    assert rows[0]["judge"]["reason"] is None
-    assert rows[0]["judge"]["raw_response"] == "not json"
-    assert "Judge response was not valid JSON" in rows[0]["judge"]["error"]
+    assert score_rows[0]["judge"]["status"] == "error"
+    assert score_rows[0]["judge"]["verdict"] is None
+    assert score_rows[0]["judge"]["reason"] is None
+    assert score_rows[0]["judge"]["raw_response"] == "not json"
+    assert "Judge response was not valid JSON" in score_rows[0]["judge"]["error"]
 
     failures = _read_jsonl(result.judge_failures_path)
     assert failures == [
         {
             "question_id": "q0",
-            "error": rows[0]["judge"]["error"],
+            "error": score_rows[0]["judge"]["error"],
             "raw_response": "not json",
             "model_provider": "mock",
             "model_name": "mock-judge",

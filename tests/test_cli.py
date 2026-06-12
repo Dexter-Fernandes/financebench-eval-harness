@@ -664,7 +664,8 @@ def test_run_eval_command_writes_mock_run_outputs(
     run_dir = output_dir / "cli-run"
     assert f"Evaluation run output: {run_dir}" in captured.out
     assert f"Wrote config snapshot to {run_dir / 'config.yaml'}" in captured.out
-    assert f"Wrote 1 outputs to {run_dir / 'outputs.jsonl'}" in captured.out
+    assert f"Wrote 1 predictions to {run_dir / 'predictions.jsonl'}" in captured.out
+    assert f"Wrote 1 score rows to {run_dir / 'scores.jsonl'}" in captured.out
     assert f"Wrote run metadata to {run_dir / 'run_metadata.json'}" in captured.out
     assert "Attempted: 1" in captured.out
     assert "Succeeded: 1" in captured.out
@@ -675,7 +676,8 @@ def test_run_eval_command_writes_mock_run_outputs(
     assert captured.err == ""
     snapshot = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
     assert snapshot["eval"]["limit"] == 1
-    rows = _read_jsonl(run_dir / "outputs.jsonl")
+    rows = _read_jsonl(run_dir / "predictions.jsonl")
+    score_rows = _read_jsonl(run_dir / "scores.jsonl")
     assert len(rows) == 1
     assert rows[0]["question_id"] == "q1"
     assert rows[0]["question"] == "What is revenue?"
@@ -686,14 +688,15 @@ def test_run_eval_command_writes_mock_run_outputs(
     assert rows[0]["input_tokens"] is None
     assert rows[0]["output_tokens"] is None
     assert rows[0]["status"] == "success"
-    assert rows[0]["scores"]["contains_gold_answer"] is False
-    assert rows[0]["scores"]["numeric_match"] is False
-    assert rows[0]["judge"]["status"] == "success"
-    assert rows[0]["judge"]["verdict"] == "incorrect"
-    assert rows[0]["judge"]["model_name"] == "mock-judge"
+    assert score_rows[0]["scores"]["contains_gold_answer"] is False
+    assert score_rows[0]["scores"]["numeric_match"] is False
+    assert score_rows[0]["judge"]["status"] == "success"
+    assert score_rows[0]["judge"]["verdict"] == "incorrect"
+    assert score_rows[0]["judge"]["model_name"] == "mock-judge"
     assert "response" not in rows[0]
     run_metadata = json.loads((run_dir / "run_metadata.json").read_text(encoding="utf-8"))
-    assert run_metadata["output_filename"] == "outputs.jsonl"
+    assert run_metadata["prediction_filename"] == "predictions.jsonl"
+    assert run_metadata["scores_filename"] == "scores.jsonl"
     assert run_metadata["attempted_count"] == 1
     assert run_metadata["success_count"] == 1
     assert run_metadata["error_count"] == 0

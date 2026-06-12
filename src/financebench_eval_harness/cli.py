@@ -46,6 +46,10 @@ from financebench_eval_harness.report import (
 )
 
 
+DEFAULT_BASELINE_RUN_CONFIG_PATH = Path("configs/baseline_closed_book.yaml")
+DEFAULT_BASELINE_REPORT_OUTPUT_DIR = Path("reports")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="financebench-harness",
@@ -122,6 +126,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override the configured example limit for smoke tests.",
     )
 
+    run_baseline_parser = subparsers.add_parser(
+        "run-baseline",
+        help="Run a baseline evaluation and generate its Markdown report.",
+    )
+    run_baseline_parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_BASELINE_RUN_CONFIG_PATH,
+        help="Baseline run config YAML path.",
+    )
+    run_baseline_parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional deterministic run directory name.",
+    )
+    run_baseline_parser.add_argument(
+        "--limit",
+        type=_positive_int,
+        default=None,
+        help="Override the configured example limit for smoke tests.",
+    )
+    run_baseline_parser.add_argument(
+        "--report-dir",
+        type=Path,
+        default=DEFAULT_BASELINE_REPORT_OUTPUT_DIR,
+        help="Directory where the generated Markdown report should be written.",
+    )
+
     report_parser = subparsers.add_parser(
         "report-baseline",
         help="Generate a Markdown baseline report for an evaluation run.",
@@ -130,7 +162,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--run-dir",
         type=Path,
         required=True,
-        help="Evaluation run directory containing run_metadata.json and outputs.jsonl.",
+        help="Evaluation run directory containing run_metadata.json, predictions.jsonl, and scores.jsonl.",
     )
     report_parser.add_argument(
         "--output-dir",
@@ -274,19 +306,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "run-eval":
         try:
-            run_config = load_evaluation_run_config(args.config)
-            if args.limit is not None:
-                run_config = replace(
-                    run_config,
-                    settings=replace(run_config.settings, limit=args.limit),
-                )
-            llm_client = _build_llm_client(run_config)
-            judge_client = _build_judge_client(run_config)
-            result = run_evaluation_from_config(
-                run_config,
-                llm_client,
-                judge_client=judge_client,
+            result = _run_configured_evaluation(
+                config_path=args.config,
                 run_id=args.run_id,
+                limit=args.limit,
             )
         except (
             EvaluationRunConfigError,
@@ -298,7 +321,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         print(f"Evaluation run output: {result.output_dir}")
         print(f"Wrote config snapshot to {result.config_path}")
-        print(f"Wrote {result.example_count} outputs to {result.outputs_path}")
+        print(f"Wrote {result.example_count} predictions to {result.predictions_path}")
+        print(f"Wrote {result.example_count} score rows to {result.scores_path}")
         print(f"Wrote run metadata to {result.run_metadata_path}")
         print(f"Attempted: {result.attempted_count}")
         print(f"Succeeded: {result.success_count}")
@@ -308,6 +332,48 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Judge attempted: {judge_summary['attempted_count']}")
         print(f"Judge succeeded: {judge_summary['success_count']}")
         print(f"Judge errors: {judge_summary['error_count']}")
+        return 0
+
+    if args.command == "run-baseline":
+        try:
+            result = _run_configured_evaluation(
+                config_path=args.config,
+                run_id=args.run_id,
+                limit=args.limit,
+            )
+            report = generate_baseline_report(
+                result.output_dir,
+                output_dir=args.report_dir,
+                report_filename=f"baseline_{result.output_dir.name}.md",
+            )
+            _record_report_path(result.run_metadata_path, report.report_path)
+            run_metadata = json.loads(
+                result.run_metadata_path.read_text(encoding="utf-8")
+            )
+            judge_summary = run_metadata["judge_summary"]
+        except (
+            BaselineReportError,
+            EvaluationRunConfigError,
+            EvaluationRunError,
+            LLMConfigError,
+            OSError,
+            KeyError,
+        ) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        print(f"Baseline run output: {result.output_dir}")
+        print(f"Wrote config snapshot to {result.config_path}")
+        print(f"Wrote {result.example_count} predictions to {result.predictions_path}")
+        print(f"Wrote {result.example_count} score rows to {result.scores_path}")
+        print(f"Wrote run metadata to {result.run_metadata_path}")
+        print(f"Baseline report: {report.report_path}")
+        print(f"Attempted: {result.attempted_count}")
+        print(f"Succeeded: {result.success_count}")
+        print(f"Errors: {result.error_count}")
+        print(f"Correct: {judge_summary['correct_count']}")
+        print(f"Partially correct: {judge_summary['partially_correct_count']}")
+        print(f"Incorrect: {judge_summary['incorrect_count']}")
         return 0
 
     if args.command == "report-baseline":
@@ -354,6 +420,41 @@ def _resolve_dataset_config(config_path: Path, data_root: Path | None) -> Datase
     if data_root is not None:
         return DatasetConfig.from_data_root(data_root)
     return load_dataset_config(config_path)
+
+
+def _run_configured_evaluation(
+    *,
+    config_path: Path,
+    run_id: str | None,
+    limit: int | None,
+):
+    run_config = load_evaluation_run_config(config_path)
+    if limit is not None:
+        run_config = replace(
+            run_config,
+            settings=replace(run_config.settings, limit=limit),
+        )
+    llm_client = _build_llm_client(run_config)
+    judge_client = _build_judge_client(run_config)
+    return run_evaluation_from_config(
+        run_config,
+        llm_client,
+        judge_client=judge_client,
+        run_id=run_id,
+    )
+
+
+def _record_report_path(run_metadata_path: Path, report_path: Path) -> None:
+    metadata = json.loads(run_metadata_path.read_text(encoding="utf-8"))
+    if not isinstance(metadata, dict):
+        raise BaselineReportError(
+            f"Run metadata must be a JSON object: {run_metadata_path}"
+        )
+    metadata["report_path"] = str(report_path)
+    run_metadata_path.write_text(
+        json.dumps(metadata, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _build_llm_client(run_config) -> LLMClient:
