@@ -7,6 +7,18 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+from financebench_eval_harness.chunking import chunk_pages
+from financebench_eval_harness.embedding import (
+    EmbeddingConfig,
+    EmbeddingConfigError,
+    MockEmbeddingClient,
+    OllamaEmbeddingClient,
+    load_embedding_config,
+)
+from financebench_eval_harness.index_builder import IndexBuildError, build_index
+from financebench_eval_harness.query_embedder import QueryEmbeddingError, embed_question
+from financebench_eval_harness.retrieval_config import RetrievalConfigError, load_retrieval_config
+from financebench_eval_harness.retrieval_types import DocumentPage as RetrievalDocumentPage
 from financebench_eval_harness.config import (
     DEFAULT_DATASET_CONFIG_PATH,
     DatasetConfig,
@@ -169,6 +181,63 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=DEFAULT_REPORT_OUTPUT_DIR,
         help="Directory where the generated Markdown report should be written.",
+    )
+
+    build_index_parser = subparsers.add_parser(
+        "build-index",
+        help="Chunk extracted pages and build a FAISS vector index.",
+    )
+    build_index_parser.add_argument(
+        "--retrieval-config",
+        type=Path,
+        default=Path("configs/retrieval/recursive_text_800.yaml"),
+        help="Retrieval config YAML (chunking strategy and settings).",
+    )
+    build_index_parser.add_argument(
+        "--embedding-config",
+        type=Path,
+        default=Path("configs/embedding/ollama_nomic.yaml"),
+        help="Embedding config YAML (provider, model, batch size).",
+    )
+    build_index_parser.add_argument(
+        "--pages",
+        type=Path,
+        required=True,
+        help="JSONL file of extracted pages (from extract-documents).",
+    )
+    build_index_parser.add_argument(
+        "--index-dir",
+        type=Path,
+        default=Path("data/indexes/financebench"),
+        help="Directory where the index artefacts will be written.",
+    )
+    build_index_parser.add_argument(
+        "--progress",
+        action="store_true",
+        default=False,
+        help="Show a rich progress bar while embedding chunks (requires rich).",
+    )
+    build_index_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Validate inputs and report what would be built without writing any files.",
+    )
+
+    embed_question_parser = subparsers.add_parser(
+        "embed-question",
+        help="Embed a question text using the configured embedding model.",
+    )
+    embed_question_parser.add_argument(
+        "--question",
+        required=True,
+        help="Question text to embed.",
+    )
+    embed_question_parser.add_argument(
+        "--embedding-config",
+        type=Path,
+        default=Path("configs/embedding/ollama_nomic.yaml"),
+        help="Embedding config YAML (provider, model, batch size).",
     )
 
     return parser
@@ -397,6 +466,82 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Incorrect: {judge_summary['incorrect_count']}")
         return 0
 
+    if args.command == "build-index":
+        try:
+            retrieval_config = load_retrieval_config(args.retrieval_config)
+        except (RetrievalConfigError, OSError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        try:
+            embedding_config = load_embedding_config(args.embedding_config)
+        except EmbeddingConfigError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        if not args.pages.is_file():
+            print(f"Pages file not found: {args.pages}", file=sys.stderr)
+            return 1
+
+        raw_pages = _read_jsonl_file(args.pages)
+        pages = [
+            RetrievalDocumentPage(
+                doc_id=row["doc_name"].removesuffix(".pdf"),
+                doc_name=row["doc_name"],
+                page_num=row["page_num"],
+                text=row["text"],
+            )
+            for row in raw_pages
+        ]
+        chunks = chunk_pages(pages, retrieval_config.chunking)
+
+        if not chunks:
+            print("No chunks produced from pages file — file may be empty.", file=sys.stderr)
+            return 1
+
+        if args.dry_run:
+            print(f"[dry-run] {len(pages)} pages → {len(chunks)} chunks")
+            print(f"[dry-run] Embedding model: {embedding_config.provider}/{embedding_config.model_name}")
+            print(f"[dry-run] Index would be written to: {args.index_dir}")
+            print("[dry-run] No files written.")
+            return 0
+
+        embedding_client = _build_embedding_client(embedding_config)
+
+        try:
+            meta = _build_index_with_progress(
+                chunks, embedding_client, retrieval_config, args.index_dir,
+                show_progress=args.progress,
+            )
+        except IndexBuildError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        print(f"Chunked {len(pages)} pages into {meta.chunk_count} chunks.")
+        print(f"Embedding model: {meta.embedding_provider}/{meta.embedding_model}")
+        print(f"Corpus hash: {meta.corpus_hash}")
+        print(f"Built index at {args.index_dir}.")
+        return 0
+
+    if args.command == "embed-question":
+        try:
+            embedding_config = load_embedding_config(args.embedding_config)
+        except EmbeddingConfigError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        embedding_client = _build_embedding_client(embedding_config)
+        try:
+            vec = embed_question(args.question, embedding_client)
+        except QueryEmbeddingError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        print(f"Embedding model: {embedding_config.provider}/{embedding_config.model_name}")
+        print(f"Embedding dimension: {len(vec)}")
+        print(f"Vector preview: {[round(v, 4) for v in vec[:4]]}...")
+        return 0
+
     parser.error(f"Unknown command: {args.command}")
     return 2
 
@@ -484,6 +629,56 @@ def _build_judge_client(run_config) -> LLMClient | None:
     raise LLMConfigError(
         f"Unsupported judge LLM provider: {run_config.judge.model.provider}"
     )
+
+
+def _build_index_with_progress(chunks, embedding_client, retrieval_config, index_dir, *, show_progress: bool = False):
+    """Call build_index, optionally with a rich progress bar."""
+    if not show_progress:
+        return build_index(chunks, embedding_client, retrieval_config, index_dir)
+
+    try:
+        from rich.progress import (
+            BarColumn,
+            MofNCompleteColumn,
+            Progress,
+            TaskProgressColumn,
+            TextColumn,
+            TimeElapsedColumn,
+            TimeRemainingColumn,
+        )
+
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+        ) as progress:
+            task = progress.add_task("Embedding chunks…", total=len(chunks))
+
+            def on_batch(completed: int, total: int) -> None:
+                progress.update(task, completed=completed)
+
+            return build_index(chunks, embedding_client, retrieval_config, index_dir, on_batch=on_batch)
+
+    except ImportError:
+        print("Progress bar requires 'rich': pip install rich", file=sys.stderr)
+        return build_index(chunks, embedding_client, retrieval_config, index_dir)
+
+
+def _build_embedding_client(config: EmbeddingConfig):
+    if config.provider == "mock":
+        return MockEmbeddingClient(config)
+    if config.provider == "ollama":
+        return OllamaEmbeddingClient(config)
+    from financebench_eval_harness.embedding import EmbeddingProviderError
+    raise EmbeddingProviderError(f"Unsupported embedding provider: {config.provider}")
+
+
+def _read_jsonl_file(path: Path) -> list[dict]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return [json.loads(line) for line in lines if line.strip()]
 
 
 def _positive_int(value: str) -> int:

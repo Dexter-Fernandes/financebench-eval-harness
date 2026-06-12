@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from financebench_eval_harness.embedding import EmbeddingClient
 from financebench_eval_harness.retrieval_config import RetrievalConfig
@@ -51,20 +51,28 @@ def build_index(
     embedding_client: EmbeddingClient,
     config: RetrievalConfig,
     index_dir: Path,
+    *,
+    on_batch: Callable[[int, int], None] | None = None,
 ) -> IndexMetadata:
-    """Embed chunks, build a FAISS index, and write all artefacts to index_dir."""
+    """Embed chunks, build a FAISS index, and write all artefacts to index_dir.
+
+    on_batch, if provided, is called after each embedding batch as
+    on_batch(completed_chunks, total_chunks).
+    """
     if not chunks:
         raise IndexBuildError("Cannot build index from empty chunk list")
 
     index_dir = Path(index_dir)
     index_dir.mkdir(parents=True, exist_ok=True)
 
-    # Embed all chunks (respect batch_size from embedding config)
     batch_size = embedding_client.config.batch_size
+    total = len(chunks)
     embeddings: list[list[float]] = []
-    for i in range(0, len(chunks), batch_size):
+    for i in range(0, total, batch_size):
         batch_texts = [c.text for c in chunks[i : i + batch_size]]
         embeddings.extend(embedding_client.embed_texts(batch_texts))
+        if on_batch is not None:
+            on_batch(min(i + batch_size, total), total)
 
     dim = len(embeddings[0])
     store = FaissVectorStore(dim=dim)

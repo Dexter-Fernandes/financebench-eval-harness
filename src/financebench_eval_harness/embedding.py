@@ -4,9 +4,12 @@ import hashlib
 import json
 import struct
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Protocol
 from urllib import request
 from urllib.error import HTTPError, URLError
+
+import yaml
 
 
 @dataclass(frozen=True)
@@ -199,11 +202,66 @@ def _default_st_factory(model_name: str) -> Any:
     return SentenceTransformer(model_name)
 
 
+# ---------------------------------------------------------------------------
+# Config loading
+# ---------------------------------------------------------------------------
+
+
+class EmbeddingConfigError(ValueError):
+    """Raised for invalid or missing embedding configuration."""
+
+
+def load_embedding_config(config_path: str | Path) -> EmbeddingConfig:
+    """Load EmbeddingConfig from a YAML file.
+
+    Expected structure::
+
+        embedding:
+          provider: ollama
+          model_name: nomic-embed-text
+          base_url: http://localhost:11434   # optional
+          timeout_seconds: 30.0             # optional
+          batch_size: 32                    # optional
+    """
+    path = Path(config_path)
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise EmbeddingConfigError(f"Embedding config file not found: {path}") from exc
+    except yaml.YAMLError as exc:
+        raise EmbeddingConfigError(f"Invalid YAML in embedding config: {exc}") from exc
+
+    if not isinstance(raw, dict) or "embedding" not in raw:
+        raise EmbeddingConfigError(
+            f"Embedding config must contain a top-level 'embedding' key: {path}"
+        )
+
+    section = raw["embedding"]
+    if not isinstance(section, dict):
+        raise EmbeddingConfigError(f"'embedding' must be a mapping in: {path}")
+
+    for required in ("provider", "model_name"):
+        if required not in section:
+            raise EmbeddingConfigError(
+                f"Embedding config missing required field '{required}' in: {path}"
+            )
+
+    return EmbeddingConfig(
+        provider=section["provider"],
+        model_name=section["model_name"],
+        base_url=section.get("base_url"),
+        timeout_seconds=float(section.get("timeout_seconds", 30.0)),
+        batch_size=int(section.get("batch_size", 32)),
+    )
+
+
 __all__ = [
     "EmbeddingClient",
     "EmbeddingConfig",
+    "EmbeddingConfigError",
     "EmbeddingProviderError",
     "MockEmbeddingClient",
     "OllamaEmbeddingClient",
     "SentenceTransformersEmbeddingClient",
+    "load_embedding_config",
 ]

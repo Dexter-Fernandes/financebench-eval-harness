@@ -20,6 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+rich = ["rich>=13.0"]
 
 [project.scripts]
 financebench-harness = "financebench_eval_harness.cli:main"

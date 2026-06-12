@@ -960,3 +960,395 @@ def _read_jsonl(path: Path) -> list[dict]:
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
+
+
+# ---------------------------------------------------------------------------
+# build-index command
+# ---------------------------------------------------------------------------
+
+
+def _write_pages_jsonl(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_retrieval_config(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join([
+            "retrieval:",
+            "  chunking:",
+            "    strategy: recursive_text",
+            "    chunk_size: 200",
+            "    chunk_overlap: 50",
+            "    min_chunk_chars: 10",
+        ]),
+        encoding="utf-8",
+    )
+
+
+def _write_embedding_config(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join([
+            "embedding:",
+            "  provider: mock",
+            "  model_name: mock-embed",
+            "  batch_size: 32",
+        ]),
+        encoding="utf-8",
+    )
+
+
+_SAMPLE_PAGES = [
+    {
+        "doc_name": "ACME_2022_10K.pdf",
+        "page_num": 1,
+        "text": "Revenue for the fiscal year was $123 million, up 12% year over year.",
+    },
+    {
+        "doc_name": "ACME_2022_10K.pdf",
+        "page_num": 2,
+        "text": "Net income for the period was $45 million after tax.",
+    },
+]
+
+
+def test_build_index_command_succeeds_and_writes_index_files(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    retrieval_cfg = tmp_path / "retrieval.yaml"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    index_dir = tmp_path / "index"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_retrieval_config(retrieval_cfg)
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "build-index",
+        "--retrieval-config", str(retrieval_cfg),
+        "--embedding-config", str(embedding_cfg),
+        "--pages", str(pages_path),
+        "--index-dir", str(index_dir),
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert (index_dir / "index.faiss").is_file()
+    assert (index_dir / "index_metadata.json").is_file()
+    assert captured.err == ""
+
+
+def test_build_index_command_prints_summary(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    retrieval_cfg = tmp_path / "retrieval.yaml"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    index_dir = tmp_path / "index"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_retrieval_config(retrieval_cfg)
+    _write_embedding_config(embedding_cfg)
+
+    main([
+        "build-index",
+        "--retrieval-config", str(retrieval_cfg),
+        "--embedding-config", str(embedding_cfg),
+        "--pages", str(pages_path),
+        "--index-dir", str(index_dir),
+    ])
+
+    captured = capsys.readouterr()
+    assert str(index_dir) in captured.out
+    assert "chunk" in captured.out.lower()
+
+
+def test_build_index_command_prints_embedding_model(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    retrieval_cfg = tmp_path / "retrieval.yaml"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_retrieval_config(retrieval_cfg)
+    _write_embedding_config(embedding_cfg)
+
+    main([
+        "build-index",
+        "--retrieval-config", str(retrieval_cfg),
+        "--embedding-config", str(embedding_cfg),
+        "--pages", str(pages_path),
+        "--index-dir", str(tmp_path / "index"),
+    ])
+
+    captured = capsys.readouterr()
+    assert "mock-embed" in captured.out
+
+
+def test_build_index_command_fails_if_pages_file_missing(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    retrieval_cfg = tmp_path / "retrieval.yaml"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    _write_retrieval_config(retrieval_cfg)
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "build-index",
+        "--retrieval-config", str(retrieval_cfg),
+        "--embedding-config", str(embedding_cfg),
+        "--pages", str(tmp_path / "nonexistent.jsonl"),
+        "--index-dir", str(tmp_path / "index"),
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.err != ""
+
+
+def test_build_index_command_fails_if_retrieval_config_missing(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "build-index",
+        "--retrieval-config", str(tmp_path / "nonexistent.yaml"),
+        "--embedding-config", str(embedding_cfg),
+        "--pages", str(pages_path),
+        "--index-dir", str(tmp_path / "index"),
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.err != ""
+
+
+def test_build_index_command_fails_if_embedding_config_missing(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    retrieval_cfg = tmp_path / "retrieval.yaml"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_retrieval_config(retrieval_cfg)
+
+    exit_code = main([
+        "build-index",
+        "--retrieval-config", str(retrieval_cfg),
+        "--embedding-config", str(tmp_path / "nonexistent.yaml"),
+        "--pages", str(pages_path),
+        "--index-dir", str(tmp_path / "index"),
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.err != ""
+
+
+def test_build_index_command_fails_if_pages_file_is_empty(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    retrieval_cfg = tmp_path / "retrieval.yaml"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    pages_path.write_text("", encoding="utf-8")
+    _write_retrieval_config(retrieval_cfg)
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "build-index",
+        "--retrieval-config", str(retrieval_cfg),
+        "--embedding-config", str(embedding_cfg),
+        "--pages", str(pages_path),
+        "--index-dir", str(tmp_path / "index"),
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.err != ""
+
+
+def test_build_index_dry_run_prints_summary_without_writing_files(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    retrieval_cfg = tmp_path / "retrieval.yaml"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    index_dir = tmp_path / "index"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_retrieval_config(retrieval_cfg)
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "build-index",
+        "--retrieval-config", str(retrieval_cfg),
+        "--embedding-config", str(embedding_cfg),
+        "--pages", str(pages_path),
+        "--index-dir", str(index_dir),
+        "--dry-run",
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert not index_dir.exists()
+    assert "dry" in captured.out.lower()
+    assert captured.err == ""
+
+
+def test_build_index_dry_run_reports_page_and_chunk_counts(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    retrieval_cfg = tmp_path / "retrieval.yaml"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_retrieval_config(retrieval_cfg)
+    _write_embedding_config(embedding_cfg)
+
+    main([
+        "build-index",
+        "--retrieval-config", str(retrieval_cfg),
+        "--embedding-config", str(embedding_cfg),
+        "--pages", str(pages_path),
+        "--index-dir", str(tmp_path / "index"),
+        "--dry-run",
+    ])
+
+    captured = capsys.readouterr()
+    assert "page" in captured.out.lower()
+    assert "chunk" in captured.out.lower()
+
+
+def test_build_index_command_succeeds_without_progress_flag(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    retrieval_cfg = tmp_path / "retrieval.yaml"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_retrieval_config(retrieval_cfg)
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "build-index",
+        "--retrieval-config", str(retrieval_cfg),
+        "--embedding-config", str(embedding_cfg),
+        "--pages", str(pages_path),
+        "--index-dir", str(tmp_path / "index"),
+    ])
+
+    assert exit_code == 0
+
+
+def test_build_index_command_accepts_progress_flag(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    retrieval_cfg = tmp_path / "retrieval.yaml"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_retrieval_config(retrieval_cfg)
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "build-index",
+        "--retrieval-config", str(retrieval_cfg),
+        "--embedding-config", str(embedding_cfg),
+        "--pages", str(pages_path),
+        "--index-dir", str(tmp_path / "index"),
+        "--progress",
+    ])
+
+    assert exit_code == 0
+
+
+# ---------------------------------------------------------------------------
+# embed-question command
+# ---------------------------------------------------------------------------
+
+
+def test_embed_question_command_succeeds_and_prints_dimension(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    embedding_cfg = tmp_path / "embedding.yaml"
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "embed-question",
+        "--question", "What was the total revenue for fiscal year 2022?",
+        "--embedding-config", str(embedding_cfg),
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "dim" in captured.out.lower() or "dimension" in captured.out.lower()
+    assert captured.err == ""
+
+
+def test_embed_question_command_fails_on_empty_question(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    embedding_cfg = tmp_path / "embedding.yaml"
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "embed-question",
+        "--question", "",
+        "--embedding-config", str(embedding_cfg),
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.err != ""
+
+
+def test_embed_question_command_prints_provider_and_model(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    embedding_cfg = tmp_path / "embedding.yaml"
+    _write_embedding_config(embedding_cfg)
+
+    main([
+        "embed-question",
+        "--question", "What was net income?",
+        "--embedding-config", str(embedding_cfg),
+    ])
+
+    captured = capsys.readouterr()
+    assert "mock-embed" in captured.out
+
+
+def test_embed_question_command_fails_if_embedding_config_missing(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    exit_code = main([
+        "embed-question",
+        "--question", "What was revenue?",
+        "--embedding-config", str(tmp_path / "nonexistent.yaml"),
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.err != ""

@@ -1,0 +1,4 @@
+embedding:
+  provider: mock
+  model_name: mock-embed
+  batch_size: 32

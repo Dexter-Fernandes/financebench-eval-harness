@@ -1,0 +1,6 @@
+embedding:
+  provider: ollama
+  model_name: nomic-embed-text
+  base_url: http://localhost:11434
+  timeout_seconds: 30.0
+  batch_size: 256
