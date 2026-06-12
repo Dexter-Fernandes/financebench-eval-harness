@@ -3,6 +3,8 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from urllib import request
+from urllib.error import URLError
 
 import pytest
 
@@ -25,6 +27,8 @@ def test_ollama_smoke_run_eval_cli_end_to_end(
     mode: str,
     run_id: str,
 ) -> None:
+    _assert_ollama_ready(model_name="llama3.2:3b")
+
     dataset_path = tmp_path / "examples.jsonl"
     output_dir = tmp_path / "runs"
     config_path = tmp_path / f"{mode}.yaml"
@@ -161,3 +165,47 @@ def _read_jsonl(path: Path) -> list[dict[str, object]]:
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
+
+
+def _assert_ollama_ready(*, model_name: str) -> None:
+    tags_url = "http://localhost:11434/api/tags"
+    try:
+        with request.urlopen(tags_url, timeout=3.0) as response:
+            response_body = response.read().decode("utf-8")
+    except URLError as exc:
+        pytest.fail(
+            f"Ollama smoke prerequisite failed: could not reach {tags_url}. "
+            "Start the local Ollama server before setting RUN_OLLAMA_SMOKE=1."
+        )
+
+    try:
+        decoded_response = json.loads(response_body)
+    except json.JSONDecodeError as exc:
+        pytest.fail(
+            f"Ollama smoke prerequisite failed: {tags_url} did not return valid JSON."
+        )
+
+    if not isinstance(decoded_response, dict):
+        pytest.fail(
+            f"Ollama smoke prerequisite failed: {tags_url} did not return a JSON object."
+        )
+
+    raw_models = decoded_response.get("models")
+    if not isinstance(raw_models, list):
+        pytest.fail(
+            "Ollama smoke prerequisite failed: /api/tags response did not include a models list."
+        )
+
+    available_models = {
+        model.get("name")
+        for model in raw_models
+        if isinstance(model, dict) and isinstance(model.get("name"), str)
+    }
+    if model_name not in available_models:
+        available_display = ", ".join(sorted(available_models)) or "(none)"
+        pytest.fail(
+            "Ollama smoke prerequisite failed: required model "
+            f"'{model_name}' is not available locally. "
+            f"Available models: {available_display}. "
+            f"Run `ollama pull {model_name}` before setting RUN_OLLAMA_SMOKE=1."
+        )
