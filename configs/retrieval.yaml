@@ -1,0 +1,18 @@
+retrieval:
+  pages_path: data/processed/financebench/pages.jsonl
+  chunks_path: data/processed/financebench/chunks.jsonl
+  index_dir: data/indexes/financebench
+  questions_path: data/processed/financebench/examples.jsonl
+  runs_dir: runs
+  top_k: 5
+  chunking:
+    strategy: recursive_text
+    chunk_size: 800
+    chunk_overlap: 150
+    min_chunk_chars: 100
+  embedding:
+    provider: ollama
+    model_name: nomic-embed-text
+    base_url: http://localhost:11434
+    timeout_seconds: 30.0
+    batch_size: 128

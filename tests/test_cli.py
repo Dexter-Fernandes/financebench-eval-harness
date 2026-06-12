@@ -960,3 +960,1143 @@ def _read_jsonl(path: Path) -> list[dict]:
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
+
+
+# ---------------------------------------------------------------------------
+# build-index command
+# ---------------------------------------------------------------------------
+
+
+def _write_pages_jsonl(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_retrieval_config(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join([
+            "retrieval:",
+            "  chunking:",
+            "    strategy: recursive_text",
+            "    chunk_size: 200",
+            "    chunk_overlap: 50",
+            "    min_chunk_chars: 10",
+        ]),
+        encoding="utf-8",
+    )
+
+
+def _write_embedding_config(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join([
+            "embedding:",
+            "  provider: mock",
+            "  model_name: mock-embed",
+            "  batch_size: 32",
+        ]),
+        encoding="utf-8",
+    )
+
+
+_SAMPLE_PAGES = [
+    {
+        "doc_name": "ACME_2022_10K.pdf",
+        "page_num": 1,
+        "text": "Revenue for the fiscal year was $123 million, up 12% year over year.",
+    },
+    {
+        "doc_name": "ACME_2022_10K.pdf",
+        "page_num": 2,
+        "text": "Net income for the period was $45 million after tax.",
+    },
+]
+
+
+def test_build_index_command_succeeds_and_writes_index_files(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    retrieval_cfg = tmp_path / "retrieval.yaml"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    index_dir = tmp_path / "index"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_retrieval_config(retrieval_cfg)
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "build-index",
+        "--retrieval-config", str(retrieval_cfg),
+        "--embedding-config", str(embedding_cfg),
+        "--pages", str(pages_path),
+        "--index-dir", str(index_dir),
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert (index_dir / "index.faiss").is_file()
+    assert (index_dir / "index_metadata.json").is_file()
+    assert captured.err == ""
+
+
+def test_build_index_command_prints_summary(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    retrieval_cfg = tmp_path / "retrieval.yaml"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    index_dir = tmp_path / "index"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_retrieval_config(retrieval_cfg)
+    _write_embedding_config(embedding_cfg)
+
+    main([
+        "build-index",
+        "--retrieval-config", str(retrieval_cfg),
+        "--embedding-config", str(embedding_cfg),
+        "--pages", str(pages_path),
+        "--index-dir", str(index_dir),
+    ])
+
+    captured = capsys.readouterr()
+    assert str(index_dir) in captured.out
+    assert "chunk" in captured.out.lower()
+
+
+def test_build_index_command_prints_embedding_model(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    retrieval_cfg = tmp_path / "retrieval.yaml"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_retrieval_config(retrieval_cfg)
+    _write_embedding_config(embedding_cfg)
+
+    main([
+        "build-index",
+        "--retrieval-config", str(retrieval_cfg),
+        "--embedding-config", str(embedding_cfg),
+        "--pages", str(pages_path),
+        "--index-dir", str(tmp_path / "index"),
+    ])
+
+    captured = capsys.readouterr()
+    assert "mock-embed" in captured.out
+
+
+def test_build_index_command_fails_if_pages_file_missing(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    retrieval_cfg = tmp_path / "retrieval.yaml"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    _write_retrieval_config(retrieval_cfg)
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "build-index",
+        "--retrieval-config", str(retrieval_cfg),
+        "--embedding-config", str(embedding_cfg),
+        "--pages", str(tmp_path / "nonexistent.jsonl"),
+        "--index-dir", str(tmp_path / "index"),
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.err != ""
+
+
+def test_build_index_command_fails_if_retrieval_config_missing(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "build-index",
+        "--retrieval-config", str(tmp_path / "nonexistent.yaml"),
+        "--embedding-config", str(embedding_cfg),
+        "--pages", str(pages_path),
+        "--index-dir", str(tmp_path / "index"),
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.err != ""
+
+
+def test_build_index_command_fails_if_embedding_config_missing(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    retrieval_cfg = tmp_path / "retrieval.yaml"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_retrieval_config(retrieval_cfg)
+
+    exit_code = main([
+        "build-index",
+        "--retrieval-config", str(retrieval_cfg),
+        "--embedding-config", str(tmp_path / "nonexistent.yaml"),
+        "--pages", str(pages_path),
+        "--index-dir", str(tmp_path / "index"),
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.err != ""
+
+
+def test_build_index_command_fails_if_pages_file_is_empty(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    retrieval_cfg = tmp_path / "retrieval.yaml"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    pages_path.write_text("", encoding="utf-8")
+    _write_retrieval_config(retrieval_cfg)
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "build-index",
+        "--retrieval-config", str(retrieval_cfg),
+        "--embedding-config", str(embedding_cfg),
+        "--pages", str(pages_path),
+        "--index-dir", str(tmp_path / "index"),
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.err != ""
+
+
+def test_build_index_dry_run_prints_summary_without_writing_files(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    retrieval_cfg = tmp_path / "retrieval.yaml"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    index_dir = tmp_path / "index"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_retrieval_config(retrieval_cfg)
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "build-index",
+        "--retrieval-config", str(retrieval_cfg),
+        "--embedding-config", str(embedding_cfg),
+        "--pages", str(pages_path),
+        "--index-dir", str(index_dir),
+        "--dry-run",
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert not index_dir.exists()
+    assert "dry" in captured.out.lower()
+    assert captured.err == ""
+
+
+def test_build_index_dry_run_reports_page_and_chunk_counts(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    retrieval_cfg = tmp_path / "retrieval.yaml"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_retrieval_config(retrieval_cfg)
+    _write_embedding_config(embedding_cfg)
+
+    main([
+        "build-index",
+        "--retrieval-config", str(retrieval_cfg),
+        "--embedding-config", str(embedding_cfg),
+        "--pages", str(pages_path),
+        "--index-dir", str(tmp_path / "index"),
+        "--dry-run",
+    ])
+
+    captured = capsys.readouterr()
+    assert "page" in captured.out.lower()
+    assert "chunk" in captured.out.lower()
+
+
+def test_build_index_command_succeeds_without_progress_flag(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    retrieval_cfg = tmp_path / "retrieval.yaml"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_retrieval_config(retrieval_cfg)
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "build-index",
+        "--retrieval-config", str(retrieval_cfg),
+        "--embedding-config", str(embedding_cfg),
+        "--pages", str(pages_path),
+        "--index-dir", str(tmp_path / "index"),
+    ])
+
+    assert exit_code == 0
+
+
+def test_build_index_command_accepts_progress_flag(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    retrieval_cfg = tmp_path / "retrieval.yaml"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_retrieval_config(retrieval_cfg)
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "build-index",
+        "--retrieval-config", str(retrieval_cfg),
+        "--embedding-config", str(embedding_cfg),
+        "--pages", str(pages_path),
+        "--index-dir", str(tmp_path / "index"),
+        "--progress",
+    ])
+
+    assert exit_code == 0
+
+
+# ---------------------------------------------------------------------------
+# embed-question command
+# ---------------------------------------------------------------------------
+
+
+def test_embed_question_command_succeeds_and_prints_dimension(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    embedding_cfg = tmp_path / "embedding.yaml"
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "embed-question",
+        "--question", "What was the total revenue for fiscal year 2022?",
+        "--embedding-config", str(embedding_cfg),
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "dim" in captured.out.lower() or "dimension" in captured.out.lower()
+    assert captured.err == ""
+
+
+def test_embed_question_command_fails_on_empty_question(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    embedding_cfg = tmp_path / "embedding.yaml"
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "embed-question",
+        "--question", "",
+        "--embedding-config", str(embedding_cfg),
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.err != ""
+
+
+def test_embed_question_command_prints_provider_and_model(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    embedding_cfg = tmp_path / "embedding.yaml"
+    _write_embedding_config(embedding_cfg)
+
+    main([
+        "embed-question",
+        "--question", "What was net income?",
+        "--embedding-config", str(embedding_cfg),
+    ])
+
+    captured = capsys.readouterr()
+    assert "mock-embed" in captured.out
+
+
+def test_embed_question_command_fails_if_embedding_config_missing(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    exit_code = main([
+        "embed-question",
+        "--question", "What was revenue?",
+        "--embedding-config", str(tmp_path / "nonexistent.yaml"),
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.err != ""
+
+
+# ---------------------------------------------------------------------------
+# retrieve command helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_test_index(tmp_path: Path) -> Path:
+    """Build a small FAISS index in tmp_path/index and return the index dir."""
+    from financebench_eval_harness.chunking import chunk_pages
+    from financebench_eval_harness.embedding import EmbeddingConfig, MockEmbeddingClient
+    from financebench_eval_harness.index_builder import build_index
+    from financebench_eval_harness.retrieval_config import load_retrieval_config
+    from financebench_eval_harness.retrieval_types import DocumentPage
+
+    pages = [
+        DocumentPage(doc_id="ACME", doc_name="ACME.pdf", page_num=1,
+                     text="Total revenue for fiscal year 2022 was $4.2 billion."),
+        DocumentPage(doc_id="ACME", doc_name="ACME.pdf", page_num=2,
+                     text="Net income was $540 million, down 3% year over year."),
+    ]
+    retrieval_cfg_path = tmp_path / "retrieval.yaml"
+    _write_retrieval_config(retrieval_cfg_path)
+    cfg = load_retrieval_config(retrieval_cfg_path)
+    chunks = chunk_pages(pages, cfg.chunking)
+
+    embed_cfg = EmbeddingConfig(provider="mock", model_name="mock-embed")
+    client = MockEmbeddingClient(embed_cfg, embedding_dim=8)
+
+    index_dir = tmp_path / "index"
+    build_index(chunks, client, cfg, index_dir)
+    return index_dir
+
+
+def _write_questions_jsonl(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(json.dumps(r) for r in rows) + "\n",
+        encoding="utf-8",
+    )
+
+
+_SAMPLE_QUESTIONS = [
+    {"question_id": "q001", "question": "What was the total revenue?"},
+    {"question_id": "q002", "question": "What was net income?"},
+]
+
+
+# ---------------------------------------------------------------------------
+# retrieve command
+# ---------------------------------------------------------------------------
+
+
+def test_retrieve_command_exits_zero(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "retrieve",
+        "--index-dir", str(index_dir),
+        "--questions", str(questions_path),
+        "--embedding-config", str(embedding_cfg),
+        "--output", str(tmp_path / "results.jsonl"),
+    ])
+
+    assert exit_code == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_retrieve_command_writes_jsonl(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    output_path = tmp_path / "results.jsonl"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_embedding_config(embedding_cfg)
+
+    main([
+        "retrieve",
+        "--index-dir", str(index_dir),
+        "--questions", str(questions_path),
+        "--embedding-config", str(embedding_cfg),
+        "--output", str(output_path),
+    ])
+
+    assert output_path.is_file()
+    rows = _read_jsonl(output_path)
+    assert len(rows) == 2
+
+
+def test_retrieve_command_output_has_question_id_and_retrieved(
+    tmp_path: Path, capsys
+) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    output_path = tmp_path / "results.jsonl"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_embedding_config(embedding_cfg)
+
+    main([
+        "retrieve",
+        "--index-dir", str(index_dir),
+        "--questions", str(questions_path),
+        "--embedding-config", str(embedding_cfg),
+        "--output", str(output_path),
+    ])
+
+    rows = _read_jsonl(output_path)
+    assert rows[0]["question_id"] == "q001"
+    assert "retrieved" in rows[0]
+    assert len(rows[0]["retrieved"]) > 0
+
+
+def test_retrieve_command_respects_top_k(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    output_path = tmp_path / "results.jsonl"
+    _write_questions_jsonl(questions_path, [_SAMPLE_QUESTIONS[0]])
+    _write_embedding_config(embedding_cfg)
+
+    main([
+        "retrieve",
+        "--index-dir", str(index_dir),
+        "--questions", str(questions_path),
+        "--embedding-config", str(embedding_cfg),
+        "--output", str(output_path),
+        "--top-k", "1",
+    ])
+
+    rows = _read_jsonl(output_path)
+    assert len(rows[0]["retrieved"]) == 1
+
+
+def test_retrieve_command_prints_summary(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_embedding_config(embedding_cfg)
+
+    main([
+        "retrieve",
+        "--index-dir", str(index_dir),
+        "--questions", str(questions_path),
+        "--embedding-config", str(embedding_cfg),
+        "--output", str(tmp_path / "results.jsonl"),
+    ])
+
+    out = capsys.readouterr().out
+    assert "2" in out
+
+
+def test_retrieve_command_fails_if_index_missing(tmp_path: Path, capsys) -> None:
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "retrieve",
+        "--index-dir", str(tmp_path / "nonexistent"),
+        "--questions", str(questions_path),
+        "--embedding-config", str(embedding_cfg),
+        "--output", str(tmp_path / "results.jsonl"),
+    ])
+
+    assert exit_code == 1
+    assert capsys.readouterr().err != ""
+
+
+def test_retrieve_command_fails_if_questions_file_missing(
+    tmp_path: Path, capsys
+) -> None:
+    index_dir = _build_test_index(tmp_path)
+    embedding_cfg = tmp_path / "embedding.yaml"
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "retrieve",
+        "--index-dir", str(index_dir),
+        "--questions", str(tmp_path / "nonexistent.jsonl"),
+        "--embedding-config", str(embedding_cfg),
+        "--output", str(tmp_path / "results.jsonl"),
+    ])
+
+    assert exit_code == 1
+    assert capsys.readouterr().err != ""
+
+
+def test_retrieve_command_writes_run_metadata_json(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    output_path = tmp_path / "run_001" / "retrieval_results.jsonl"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_embedding_config(embedding_cfg)
+
+    main([
+        "retrieve",
+        "--index-dir", str(index_dir),
+        "--questions", str(questions_path),
+        "--embedding-config", str(embedding_cfg),
+        "--output", str(output_path),
+        "--run-id", "test-run",
+    ])
+
+    assert (tmp_path / "run_001" / "retrieval_run_metadata.json").is_file()
+
+
+def test_retrieve_command_metadata_contains_provided_run_id(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    output_path = tmp_path / "run_001" / "retrieval_results.jsonl"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_embedding_config(embedding_cfg)
+
+    main([
+        "retrieve",
+        "--index-dir", str(index_dir),
+        "--questions", str(questions_path),
+        "--embedding-config", str(embedding_cfg),
+        "--output", str(output_path),
+        "--run-id", "my-custom-run",
+    ])
+
+    d = json.loads((tmp_path / "run_001" / "retrieval_run_metadata.json").read_text())
+    assert d["run_id"] == "my-custom-run"
+
+
+def test_retrieve_command_metadata_auto_generates_run_id(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    output_path = tmp_path / "run_001" / "retrieval_results.jsonl"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_embedding_config(embedding_cfg)
+
+    main([
+        "retrieve",
+        "--index-dir", str(index_dir),
+        "--questions", str(questions_path),
+        "--embedding-config", str(embedding_cfg),
+        "--output", str(output_path),
+    ])
+
+    d = json.loads((tmp_path / "run_001" / "retrieval_run_metadata.json").read_text())
+    assert isinstance(d["run_id"], str) and d["run_id"]
+
+
+def test_retrieve_command_metadata_contains_dataset_path(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    output_path = tmp_path / "run_001" / "retrieval_results.jsonl"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_embedding_config(embedding_cfg)
+
+    main([
+        "retrieve",
+        "--index-dir", str(index_dir),
+        "--questions", str(questions_path),
+        "--embedding-config", str(embedding_cfg),
+        "--output", str(output_path),
+        "--run-id", "r",
+    ])
+
+    d = json.loads((tmp_path / "run_001" / "retrieval_run_metadata.json").read_text())
+    assert d["dataset_path"] == str(questions_path)
+
+
+def test_retrieve_command_metadata_contains_top_k(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    output_path = tmp_path / "run_001" / "retrieval_results.jsonl"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_embedding_config(embedding_cfg)
+
+    main([
+        "retrieve",
+        "--index-dir", str(index_dir),
+        "--questions", str(questions_path),
+        "--embedding-config", str(embedding_cfg),
+        "--output", str(output_path),
+        "--top-k", "3",
+        "--run-id", "r",
+    ])
+
+    d = json.loads((tmp_path / "run_001" / "retrieval_run_metadata.json").read_text())
+    assert d["top_k"] == 3
+
+
+def test_retrieve_command_metadata_contains_chunk_size_and_overlap(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    output_path = tmp_path / "run_001" / "retrieval_results.jsonl"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_embedding_config(embedding_cfg)
+
+    main([
+        "retrieve",
+        "--index-dir", str(index_dir),
+        "--questions", str(questions_path),
+        "--embedding-config", str(embedding_cfg),
+        "--output", str(output_path),
+        "--run-id", "r",
+    ])
+
+    d = json.loads((tmp_path / "run_001" / "retrieval_run_metadata.json").read_text())
+    assert isinstance(d["chunk_size"], int)
+    assert isinstance(d["chunk_overlap"], int)
+
+
+def test_retrieve_command_auto_output_creates_run_001(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    runs_dir = tmp_path / "runs"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "retrieve",
+        "--index-dir", str(index_dir),
+        "--questions", str(questions_path),
+        "--embedding-config", str(embedding_cfg),
+        "--runs-dir", str(runs_dir),
+    ])
+
+    assert exit_code == 0
+    assert (runs_dir / "run_001" / "retrieval_results.jsonl").is_file()
+
+
+def test_retrieve_command_auto_output_increments_run_number(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    runs_dir = tmp_path / "runs"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_embedding_config(embedding_cfg)
+
+    (runs_dir / "run_001").mkdir(parents=True)
+    (runs_dir / "run_002").mkdir()
+
+    main([
+        "retrieve",
+        "--index-dir", str(index_dir),
+        "--questions", str(questions_path),
+        "--embedding-config", str(embedding_cfg),
+        "--runs-dir", str(runs_dir),
+    ])
+
+    assert (runs_dir / "run_003" / "retrieval_results.jsonl").is_file()
+
+
+def test_retrieve_command_explicit_output_overrides_runs_dir(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    explicit_output = tmp_path / "custom" / "my_results.jsonl"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_embedding_config(embedding_cfg)
+
+    main([
+        "retrieve",
+        "--index-dir", str(index_dir),
+        "--questions", str(questions_path),
+        "--embedding-config", str(embedding_cfg),
+        "--output", str(explicit_output),
+    ])
+
+    assert explicit_output.is_file()
+
+
+def test_retrieve_command_auto_output_prints_run_dir(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    runs_dir = tmp_path / "runs"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_embedding_config(embedding_cfg)
+
+    main([
+        "retrieve",
+        "--index-dir", str(index_dir),
+        "--questions", str(questions_path),
+        "--embedding-config", str(embedding_cfg),
+        "--runs-dir", str(runs_dir),
+    ])
+
+    out = capsys.readouterr().out
+    assert "run_001" in out
+
+
+# ---------------------------------------------------------------------------
+# inspect-retrieval command helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_retrieval_run(tmp_path: Path, *, with_examples: bool = False) -> Path:
+    """Create a minimal run directory with retrieval_results.jsonl."""
+    run_dir = tmp_path / "run_001"
+    run_dir.mkdir()
+
+    results = [
+        {
+            "question_id": "q001",
+            "query": "What was total revenue?",
+            "retrieved": [
+                {
+                    "rank": 1,
+                    "chunk_id": "DOC_p001_c000",
+                    "doc_name": "DOC.pdf",
+                    "page_num": 1,
+                    "score": 0.82,
+                    "text": "Revenue was $4.2 billion for the fiscal year.",
+                }
+            ],
+        }
+    ]
+    (run_dir / "retrieval_results.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in results) + "\n", encoding="utf-8"
+    )
+
+    if with_examples:
+        examples = [
+            {
+                "question_id": "q001",
+                "question": "What was total revenue for the year?",
+                "evidence": [
+                    {
+                        "doc_name": "DOC.pdf",
+                        "matched_page_num": 1,
+                        "evidence_text": "Revenue was $4.2 billion for the fiscal year.",
+                    }
+                ],
+            }
+        ]
+        examples_path = tmp_path / "examples.jsonl"
+        examples_path.write_text(
+            "\n".join(json.dumps(e) for e in examples) + "\n", encoding="utf-8"
+        )
+        (run_dir / "run_metadata.json").write_text(
+            json.dumps({"run_id": "r", "dataset_path": str(examples_path)}),
+            encoding="utf-8",
+        )
+
+    return run_dir
+
+
+# ---------------------------------------------------------------------------
+# inspect-retrieval command
+# ---------------------------------------------------------------------------
+
+
+def test_inspect_retrieval_exits_zero(tmp_path: Path, capsys) -> None:
+    run_dir = _build_retrieval_run(tmp_path)
+
+    exit_code = main([
+        "inspect-retrieval",
+        "--question-id", "q001",
+        "--run", str(run_dir),
+    ])
+
+    assert exit_code == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_inspect_retrieval_output_contains_question_text(tmp_path: Path, capsys) -> None:
+    run_dir = _build_retrieval_run(tmp_path, with_examples=True)
+
+    main([
+        "inspect-retrieval",
+        "--question-id", "q001",
+        "--run", str(run_dir),
+    ])
+
+    out = capsys.readouterr().out
+    assert "What was total revenue for the year?" in out
+
+
+def test_inspect_retrieval_output_contains_chunk_score(tmp_path: Path, capsys) -> None:
+    run_dir = _build_retrieval_run(tmp_path)
+
+    main([
+        "inspect-retrieval",
+        "--question-id", "q001",
+        "--run", str(run_dir),
+    ])
+
+    out = capsys.readouterr().out
+    assert "0.82" in out
+
+
+def test_inspect_retrieval_fails_when_run_dir_missing(tmp_path: Path, capsys) -> None:
+    exit_code = main([
+        "inspect-retrieval",
+        "--question-id", "q001",
+        "--run", str(tmp_path / "nonexistent"),
+    ])
+
+    assert exit_code == 1
+    assert capsys.readouterr().err != ""
+
+
+def test_inspect_retrieval_fails_when_question_id_not_found(tmp_path: Path, capsys) -> None:
+    run_dir = _build_retrieval_run(tmp_path)
+
+    exit_code = main([
+        "inspect-retrieval",
+        "--question-id", "q999",
+        "--run", str(run_dir),
+    ])
+
+    assert exit_code == 1
+    assert capsys.readouterr().err != ""
+
+
+# ---------------------------------------------------------------------------
+# --config pipeline helpers
+# ---------------------------------------------------------------------------
+
+
+def _write_pipeline_config(
+    path: Path,
+    *,
+    pages_path: Path,
+    chunks_path: Path,
+    index_dir: Path,
+    questions_path: Path,
+    runs_dir: Path,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join([
+            "retrieval:",
+            f"  pages_path: {pages_path}",
+            f"  chunks_path: {chunks_path}",
+            f"  index_dir: {index_dir}",
+            f"  questions_path: {questions_path}",
+            f"  runs_dir: {runs_dir}",
+            "  top_k: 3",
+            "  chunking:",
+            "    strategy: recursive_text",
+            "    chunk_size: 200",
+            "    chunk_overlap: 20",
+            "    min_chunk_chars: 10",
+            "  embedding:",
+            "    provider: mock",
+            "    model_name: mock-embed",
+            "    batch_size: 32",
+        ]),
+        encoding="utf-8",
+    )
+
+
+# ---------------------------------------------------------------------------
+# chunk-documents command
+# ---------------------------------------------------------------------------
+
+
+def test_chunk_documents_exits_zero(tmp_path: Path, capsys) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    chunks_path = tmp_path / "chunks" / "chunks.jsonl"
+    config_path = tmp_path / "retrieval.yaml"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_pipeline_config(
+        config_path,
+        pages_path=pages_path,
+        chunks_path=chunks_path,
+        index_dir=tmp_path / "idx",
+        questions_path=tmp_path / "q.jsonl",
+        runs_dir=tmp_path / "runs",
+    )
+
+    exit_code = main(["chunk-documents", "--config", str(config_path)])
+
+    assert exit_code == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_chunk_documents_writes_chunks_jsonl(tmp_path: Path, capsys) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    chunks_path = tmp_path / "chunks.jsonl"
+    config_path = tmp_path / "retrieval.yaml"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_pipeline_config(
+        config_path,
+        pages_path=pages_path,
+        chunks_path=chunks_path,
+        index_dir=tmp_path / "idx",
+        questions_path=tmp_path / "q.jsonl",
+        runs_dir=tmp_path / "runs",
+    )
+
+    main(["chunk-documents", "--config", str(config_path)])
+
+    assert chunks_path.is_file()
+    rows = _read_jsonl(chunks_path)
+    assert len(rows) >= len(_SAMPLE_PAGES)
+    assert all("chunk_id" in r and "text" in r and "doc_name" in r for r in rows)
+
+
+def test_chunk_documents_output_has_page_provenance(tmp_path: Path, capsys) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    chunks_path = tmp_path / "chunks.jsonl"
+    config_path = tmp_path / "retrieval.yaml"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_pipeline_config(
+        config_path,
+        pages_path=pages_path,
+        chunks_path=chunks_path,
+        index_dir=tmp_path / "idx",
+        questions_path=tmp_path / "q.jsonl",
+        runs_dir=tmp_path / "runs",
+    )
+
+    main(["chunk-documents", "--config", str(config_path)])
+
+    rows = _read_jsonl(chunks_path)
+    assert all(isinstance(r["page_num"], int) for r in rows)
+    doc_names = {r["doc_name"] for r in rows}
+    assert "ACME_2022_10K.pdf" in doc_names
+
+
+# ---------------------------------------------------------------------------
+# build-index --config
+# ---------------------------------------------------------------------------
+
+
+def test_build_index_config_exits_zero(tmp_path: Path, capsys) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    chunks_path = tmp_path / "chunks.jsonl"
+    index_dir = tmp_path / "idx"
+    config_path = tmp_path / "retrieval.yaml"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_pipeline_config(
+        config_path,
+        pages_path=pages_path,
+        chunks_path=chunks_path,
+        index_dir=index_dir,
+        questions_path=tmp_path / "q.jsonl",
+        runs_dir=tmp_path / "runs",
+    )
+    main(["chunk-documents", "--config", str(config_path)])
+
+    exit_code = main(["build-index", "--config", str(config_path)])
+
+    assert exit_code == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_build_index_config_writes_index_files(tmp_path: Path, capsys) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    chunks_path = tmp_path / "chunks.jsonl"
+    index_dir = tmp_path / "idx"
+    config_path = tmp_path / "retrieval.yaml"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_pipeline_config(
+        config_path,
+        pages_path=pages_path,
+        chunks_path=chunks_path,
+        index_dir=index_dir,
+        questions_path=tmp_path / "q.jsonl",
+        runs_dir=tmp_path / "runs",
+    )
+    main(["chunk-documents", "--config", str(config_path)])
+    main(["build-index", "--config", str(config_path)])
+
+    assert (index_dir / "index.faiss").is_file()
+    assert (index_dir / "chunk_metadata.jsonl").is_file()
+    assert (index_dir / "index_metadata.json").is_file()
+
+
+# ---------------------------------------------------------------------------
+# retrieve --config
+# ---------------------------------------------------------------------------
+
+
+def test_retrieve_config_exits_zero(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "q.jsonl"
+    runs_dir = tmp_path / "runs"
+    config_path = tmp_path / "retrieval.yaml"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_pipeline_config(
+        config_path,
+        pages_path=tmp_path / "pages.jsonl",
+        chunks_path=tmp_path / "chunks.jsonl",
+        index_dir=index_dir,
+        questions_path=questions_path,
+        runs_dir=runs_dir,
+    )
+
+    exit_code = main(["retrieve", "--config", str(config_path)])
+
+    assert exit_code == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_retrieve_config_writes_retrieval_run_metadata(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "q.jsonl"
+    runs_dir = tmp_path / "runs"
+    config_path = tmp_path / "retrieval.yaml"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_pipeline_config(
+        config_path,
+        pages_path=tmp_path / "pages.jsonl",
+        chunks_path=tmp_path / "chunks.jsonl",
+        index_dir=index_dir,
+        questions_path=questions_path,
+        runs_dir=runs_dir,
+    )
+
+    main(["retrieve", "--config", str(config_path)])
+
+    run_dirs = sorted((runs_dir).iterdir())
+    assert len(run_dirs) == 1
+    assert (run_dirs[0] / "retrieval_run_metadata.json").is_file()
+
+
+def test_retrieve_config_writes_config_yaml_to_run_dir(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "q.jsonl"
+    runs_dir = tmp_path / "runs"
+    config_path = tmp_path / "retrieval.yaml"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_pipeline_config(
+        config_path,
+        pages_path=tmp_path / "pages.jsonl",
+        chunks_path=tmp_path / "chunks.jsonl",
+        index_dir=index_dir,
+        questions_path=questions_path,
+        runs_dir=runs_dir,
+    )
+
+    main(["retrieve", "--config", str(config_path)])
+
+    run_dirs = sorted(runs_dir.iterdir())
+    assert (run_dirs[0] / "config.yaml").is_file()
