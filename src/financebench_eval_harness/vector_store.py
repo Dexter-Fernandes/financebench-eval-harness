@@ -90,6 +90,10 @@ class FaissVectorStore:
     def count(self) -> int:
         return self._index.ntotal
 
+    @property
+    def chunks(self) -> list[Chunk]:
+        return list(self._chunks)
+
     # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------

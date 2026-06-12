@@ -168,6 +168,24 @@ class TestFaissVectorStoreMetadata:
         store.add([make_chunk("c001"), make_chunk("c002")], [VECS["north"], VECS["east"]])
         assert store.count == 2
 
+    def test_chunks_property_returns_indexed_chunks(self) -> None:
+        store = FaissVectorStore(dim=DIM)
+        c1, c2 = make_chunk("c001"), make_chunk("c002")
+        store.add([c1, c2], [VECS["north"], VECS["east"]])
+        assert store.chunks == [c1, c2]
+
+    def test_chunks_property_is_empty_before_add(self) -> None:
+        store = FaissVectorStore(dim=DIM)
+        assert store.chunks == []
+
+    def test_chunks_property_preserved_after_load(self, tmp_path: Path) -> None:
+        store = FaissVectorStore(dim=DIM)
+        chunks = [make_chunk(k) for k in VECS]
+        store.add(chunks, list(VECS.values()))
+        store.save(tmp_path / "idx")
+        loaded = FaissVectorStore.load(tmp_path / "idx")
+        assert [c.chunk_id for c in loaded.chunks] == [c.chunk_id for c in chunks]
+
 
 # ---------------------------------------------------------------------------
 # FaissVectorStore — error handling

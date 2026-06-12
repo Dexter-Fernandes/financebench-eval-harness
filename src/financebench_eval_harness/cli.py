@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Sequence
 
 from financebench_eval_harness.chunking import chunk_pages
+from financebench_eval_harness.retriever import Question, next_run_dir, run_retrieval
 from financebench_eval_harness.embedding import (
     EmbeddingConfig,
     EmbeddingConfigError,
@@ -15,7 +16,7 @@ from financebench_eval_harness.embedding import (
     OllamaEmbeddingClient,
     load_embedding_config,
 )
-from financebench_eval_harness.index_builder import IndexBuildError, build_index
+from financebench_eval_harness.index_builder import IndexBuildError, build_index, load_index
 from financebench_eval_harness.query_embedder import QueryEmbeddingError, embed_question
 from financebench_eval_harness.retrieval_config import RetrievalConfigError, load_retrieval_config
 from financebench_eval_harness.retrieval_types import DocumentPage as RetrievalDocumentPage
@@ -238,6 +239,58 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("configs/embedding/ollama_nomic.yaml"),
         help="Embedding config YAML (provider, model, batch size).",
+    )
+
+    retrieve_parser = subparsers.add_parser(
+        "retrieve",
+        help="Retrieve top-k chunks for each question and write JSONL results.",
+    )
+    retrieve_parser.add_argument(
+        "--index-dir",
+        type=Path,
+        default=Path("data/indexes/financebench"),
+        help="Directory containing the built FAISS index.",
+    )
+    retrieve_parser.add_argument(
+        "--questions",
+        type=Path,
+        required=True,
+        help="JSONL file of questions (question_id + question fields).",
+    )
+    retrieve_parser.add_argument(
+        "--embedding-config",
+        type=Path,
+        default=Path("configs/embedding/ollama_nomic.yaml"),
+        help="Embedding config YAML (must match the model used to build the index).",
+    )
+    retrieve_parser.add_argument(
+        "--runs-dir",
+        type=Path,
+        default=Path("runs"),
+        help="Directory where numbered run subdirectories are created (default: runs/).",
+    )
+    retrieve_parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Explicit output JSONL path; overrides --runs-dir auto-numbering.",
+    )
+    retrieve_parser.add_argument(
+        "--top-k",
+        type=int,
+        default=5,
+        help="Number of chunks to retrieve per question.",
+    )
+    retrieve_parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional run identifier written into run_metadata.json (auto-generated if omitted).",
+    )
+    retrieve_parser.add_argument(
+        "--chunks-path",
+        type=Path,
+        default=None,
+        help="Path to the chunks JSONL used to build the index (recorded in run metadata).",
     )
 
     return parser
@@ -540,6 +593,57 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Embedding model: {embedding_config.provider}/{embedding_config.model_name}")
         print(f"Embedding dimension: {len(vec)}")
         print(f"Vector preview: {[round(v, 4) for v in vec[:4]]}...")
+        return 0
+
+    if args.command == "retrieve":
+        try:
+            store, index_meta = load_index(args.index_dir)
+        except IndexBuildError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        if not args.questions.is_file():
+            print(f"Questions file not found: {args.questions}", file=sys.stderr)
+            return 1
+
+        try:
+            embedding_config = load_embedding_config(args.embedding_config)
+        except EmbeddingConfigError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        raw = _read_jsonl_file(args.questions)
+        questions = [
+            Question(
+                question_id=row["question_id"],
+                query=row.get("query") or row["question"],
+            )
+            for row in raw
+        ]
+
+        if args.output is not None:
+            output_path = args.output
+        else:
+            run_dir = next_run_dir(args.runs_dir)
+            output_path = run_dir / "retrieval_results.jsonl"
+
+        embedding_client = _build_embedding_client(embedding_config)
+        result = run_retrieval(
+            questions,
+            store,
+            embedding_client,
+            output_path,
+            top_k=args.top_k,
+            run_id=args.run_id,
+            dataset_path=str(args.questions),
+            chunks_path=str(args.chunks_path) if args.chunks_path else None,
+            index_metadata=index_meta,
+        )
+
+        print(f"Retrieved top-{args.top_k} chunks for {result.question_count} questions.")
+        print(f"Results written to {result.output_path}.")
+        if result.metadata_path:
+            print(f"Run metadata written to {result.metadata_path}.")
         return 0
 
     parser.error(f"Unknown command: {args.command}")
