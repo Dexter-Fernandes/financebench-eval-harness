@@ -1,0 +1,18 @@
+You are judging whether a model prediction correctly answers a financial analysis question.
+
+Compare the prediction to the gold answer. Use the evidence only as supporting context.
+
+Question:
+{question}
+
+Gold answer:
+{gold_answer}
+
+Model prediction:
+{prediction}
+
+Evidence:
+{evidence_text}
+
+Return only valid JSON with this shape:
+{{"verdict": "correct|partially_correct|incorrect|not_answered", "reason": "short explanation"}}

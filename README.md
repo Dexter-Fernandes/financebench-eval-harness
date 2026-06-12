@@ -92,3 +92,66 @@ Downstream retrieval and evaluation code should read `examples.jsonl` rather tha
 the raw FinanceBench question file. Each processed evidence item includes
 `matched_page_num`, which is the exact `page_num` from `pages.jsonl`; look up the
 matched page by canonical PDF filename plus `matched_page_num`.
+
+## Baseline Evaluation Modes
+
+M2 evaluation starts with two non-RAG baselines configured in
+`configs/evaluation/baselines.yaml`. The config references versioned prompt
+template files under `prompts/baselines/`:
+
+- `closed_book`: the model receives only the FinanceBench question, with no
+  retrieval results and no document context. This measures what the model can
+  answer from parametric knowledge or reasoning alone.
+- `oracle_context`: the model receives the question plus the gold evidence text
+  from the processed example. This removes retrieval from the path and helps
+  isolate generation and reasoning quality when the relevant evidence is already
+  available.
+
+These modes are comparison baselines, not benchmark claims. Recorded runs should
+still capture the model provider, model name, prompt id, prompt version, dataset
+slice, and evaluation settings before results are reported. Prompt rendering
+returns run metadata with the evaluation mode, prompt id, prompt version, and
+template path so future run artefacts can record which prompt was used.
+
+## LLM Provider Configuration
+
+LLM calls should go through the shared provider interface in
+`financebench_eval_harness.llm` rather than calling a provider directly. The
+default local LLM config lives at `configs/llm/local.yaml` and records provider,
+model name, temperature, max tokens, timeout settings, and optional Ollama
+`base_url`. Evaluation and CI still default to the mock provider via
+`configs/evaluation/local_mock.yaml`. Tests can use `MockLLMClient` to exercise
+harness code without making API calls.
+
+## Run A Mock Evaluation
+
+Use `configs/baseline_closed_book.yaml` for a deterministic local baseline run
+that renders prompts, writes mock LLM responses, scores the predictions, and
+creates a Markdown report without calling an external API:
+
+```bash
+python -m financebench_eval run-baseline --config configs/baseline_closed_book.yaml
+```
+
+Each run writes a directory under `runs/` containing `config.yaml`, the
+normalized config snapshot used for reproducibility, `predictions.jsonl` with
+one model prediction per evaluated example, `scores.jsonl` with automatic and
+judge scores, and `run_metadata.json` with run-level settings and counts. The
+baseline command also writes `reports/baseline_<run_id>.md`. Change
+`eval.mode`, `eval.limit`, or the `model` settings in the YAML file to compare
+configurations without editing code.
+
+## Run An Optional Local Ollama Smoke Baseline
+
+Mock remains the default committed baseline for tests and CI. For a cheap local
+smoke run against a real model, use one of the dedicated Ollama configs:
+
+```bash
+python -m financebench_eval run-eval --config configs/evaluation/ollama_closed_book.yaml --limit 5
+python -m financebench_eval run-eval --config configs/evaluation/ollama_oracle_context.yaml --limit 5
+```
+
+These configs expect a local Ollama server at `http://localhost:11434` and use
+`llama3.2:3b` with `temperature: 0.0` for reproducible smoke checks. Both the
+answer model and judge model use Ollama in these opt-in configs. If the server
+is unavailable or the model is missing, the harness emits a readable error.

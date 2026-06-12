@@ -1,0 +1,22 @@
+eval:
+  dataset_path: data/processed/financebench/examples.jsonl
+  output_dir: runs
+  mode: closed_book
+  limit: 20
+model:
+  provider: mock
+  model_name: mock-llm
+  temperature: 0.0
+  max_tokens: 512
+  timeout_seconds: 30
+judge:
+  enabled: true
+  provider: mock
+  model_name: mock-judge
+  temperature: 0.0
+  max_tokens: 256
+  timeout_seconds: 30
+  prompt:
+    id: answer_correctness_v1
+    version: v1
+    template_path: prompts/judges/answer_correctness_v1.txt

@@ -2,9 +2,11 @@ from pathlib import Path
 
 import json
 import pytest
+import yaml
 
 import financebench_eval_harness.data as data_module
 from financebench_eval_harness.cli import main
+from financebench_eval_harness.llm import LLMGenerationResult
 
 
 def test_validate_data_command_succeeds_for_expected_layout(
@@ -590,6 +592,305 @@ def test_build_examples_command_writes_processed_files_and_summary(
     assert captured.err == ""
     assert _read_jsonl(examples_path)[0]["question_id"] == "financebench_id_1"
     assert _read_jsonl(rejected_path)[0]["question_id"] == "financebench_id_2"
+
+
+def test_run_eval_command_writes_mock_run_outputs(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    examples_path = tmp_path / "examples.jsonl"
+    _write_pages(
+        examples_path,
+        [
+            {
+                "question_id": "q1",
+                "question": "What is revenue?",
+                "gold_answer": "$123.00",
+                "evidence": [{"evidence_text": "Revenue was $123."}],
+            },
+            {
+                "question_id": "q2",
+                "question": "What is gross profit?",
+                "gold_answer": "$456.00",
+                "evidence": [{"evidence_text": "Gross profit was $456."}],
+            }
+        ],
+    )
+    config_path = tmp_path / "eval.yaml"
+    output_dir = tmp_path / "runs"
+    config_path.write_text(
+        "\n".join(
+            [
+                "eval:",
+                f"  dataset_path: {examples_path}",
+                f"  output_dir: {output_dir}",
+                "  mode: closed_book",
+                "  limit: 2",
+                "model:",
+                "  provider: mock",
+                "  model_name: mock-llm",
+                "  temperature: 0.0",
+                "  max_tokens: 512",
+                "  timeout_seconds: 30",
+                "judge:",
+                "  enabled: true",
+                "  provider: mock",
+                "  model_name: mock-judge",
+                "  temperature: 0.0",
+                "  max_tokens: 256",
+                "  timeout_seconds: 30",
+                "  prompt:",
+                "    id: answer_correctness_v1",
+                "    version: v1",
+                "    template_path: prompts/judges/answer_correctness_v1.txt",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "run-eval",
+            "--config",
+            str(config_path),
+            "--run-id",
+            "cli-run",
+            "--limit",
+            "1",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    run_dir = output_dir / "cli-run"
+    assert f"Evaluation run output: {run_dir}" in captured.out
+    assert f"Wrote config snapshot to {run_dir / 'config.yaml'}" in captured.out
+    assert f"Wrote 1 predictions to {run_dir / 'predictions.jsonl'}" in captured.out
+    assert f"Wrote 1 score rows to {run_dir / 'scores.jsonl'}" in captured.out
+    assert f"Wrote run metadata to {run_dir / 'run_metadata.json'}" in captured.out
+    assert "Attempted: 1" in captured.out
+    assert "Succeeded: 1" in captured.out
+    assert "Errors: 0" in captured.out
+    assert "Judge attempted: 1" in captured.out
+    assert "Judge succeeded: 1" in captured.out
+    assert "Judge errors: 0" in captured.out
+    assert captured.err == ""
+    snapshot = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    assert snapshot["eval"]["limit"] == 1
+    rows = _read_jsonl(run_dir / "predictions.jsonl")
+    score_rows = _read_jsonl(run_dir / "scores.jsonl")
+    assert len(rows) == 1
+    assert rows[0]["question_id"] == "q1"
+    assert rows[0]["question"] == "What is revenue?"
+    assert rows[0]["prediction"] == "mock response"
+    assert rows[0]["model_provider"] == "mock"
+    assert rows[0]["model_name"] == "mock-llm"
+    assert rows[0]["latency_ms"] >= 0
+    assert rows[0]["input_tokens"] is None
+    assert rows[0]["output_tokens"] is None
+    assert rows[0]["status"] == "success"
+    assert score_rows[0]["scores"]["contains_gold_answer"] is False
+    assert score_rows[0]["scores"]["numeric_match"] is False
+    assert score_rows[0]["judge"]["status"] == "success"
+    assert score_rows[0]["judge"]["verdict"] == "incorrect"
+    assert score_rows[0]["judge"]["model_name"] == "mock-judge"
+    assert "response" not in rows[0]
+    run_metadata = json.loads((run_dir / "run_metadata.json").read_text(encoding="utf-8"))
+    assert run_metadata["prediction_filename"] == "predictions.jsonl"
+    assert run_metadata["scores_filename"] == "scores.jsonl"
+    assert run_metadata["attempted_count"] == 1
+    assert run_metadata["success_count"] == 1
+    assert run_metadata["error_count"] == 0
+    assert run_metadata["score_summary"]["example_count"] == 1
+    assert run_metadata["score_summary"]["numeric_match_count"] == 0
+    assert run_metadata["judge"]["enabled"] is True
+    assert run_metadata["judge_summary"]["attempted_count"] == 1
+    assert run_metadata["judge_summary"]["success_count"] == 1
+    assert run_metadata["judge_summary"]["error_count"] == 0
+
+
+def test_report_baseline_command_writes_markdown_report(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    run_dir = tmp_path / "runs" / "report-run"
+    reports_dir = tmp_path / "reports" / "generated"
+    (run_dir).mkdir(parents=True)
+    (run_dir / "run_metadata.json").write_text(
+        json.dumps(
+            {
+                "mode": "closed_book",
+                "model_provider": "mock",
+                "model_name": "mock-model",
+                "attempted_count": 2,
+                "judge_summary": {
+                    "attempted_count": 2,
+                    "success_count": 2,
+                    "error_count": 0,
+                    "correct_count": 1,
+                    "correct_rate": 0.5,
+                    "partially_correct_count": 0,
+                    "partially_correct_rate": 0.0,
+                    "incorrect_count": 1,
+                    "incorrect_rate": 0.5,
+                    "not_answered_count": 0,
+                    "not_answered_rate": 0.0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_pages(
+        run_dir / "outputs.jsonl",
+        [
+            {
+                "question_id": "q1",
+                "question": "What was revenue?",
+                "gold_answer": "$123",
+                "prediction": "$123",
+                "latency_ms": 1000,
+                "input_tokens": None,
+                "output_tokens": None,
+                "judge": {
+                    "status": "success",
+                    "verdict": "correct",
+                    "reason": "Matches.",
+                    "error": None,
+                },
+            },
+            {
+                "question_id": "q2",
+                "question": "What was gross profit?",
+                "gold_answer": "$456",
+                "prediction": "$400",
+                "latency_ms": 2000,
+                "input_tokens": None,
+                "output_tokens": None,
+                "judge": {
+                    "status": "success",
+                    "verdict": "incorrect",
+                    "reason": "Wrong amount.",
+                    "error": None,
+                },
+            },
+        ],
+    )
+
+    exit_code = main(
+        [
+            "report-baseline",
+            "--run-dir",
+            str(run_dir),
+            "--output-dir",
+            str(reports_dir),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    report_path = reports_dir / "baseline_closed_book_mock-model.md"
+    assert exit_code == 0
+    assert f"Baseline report: {report_path}" in captured.out
+    assert "Questions evaluated: 2" in captured.out
+    assert "Correct: 1" in captured.out
+    assert "Incorrect: 1" in captured.out
+    assert captured.err == ""
+    assert "| Accuracy estimate | 50% |" in report_path.read_text(encoding="utf-8")
+
+
+def test_run_eval_builds_ollama_clients_from_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    examples_path = tmp_path / "examples.jsonl"
+    output_dir = tmp_path / "runs"
+    config_path = tmp_path / "eval.yaml"
+    _write_pages(
+        examples_path,
+        [
+            {
+                "question_id": "q1",
+                "question": "What is revenue?",
+                "gold_answer": "$123",
+                "evidence": [{"evidence_text": "Revenue was $123."}],
+            }
+        ],
+    )
+    config_path.write_text(
+        "\n".join(
+            [
+                "eval:",
+                f"  dataset_path: {examples_path}",
+                f"  output_dir: {output_dir}",
+                "  mode: closed_book",
+                "  limit: 9",
+                "model:",
+                "  provider: ollama",
+                "  model_name: llama3.2:3b",
+                "  temperature: 0.0",
+                "  max_tokens: 512",
+                "  timeout_seconds: 60",
+                "  base_url: http://localhost:11434",
+                "judge:",
+                "  enabled: true",
+                "  provider: ollama",
+                "  model_name: llama3.2:3b",
+                "  temperature: 0.0",
+                "  max_tokens: 256",
+                "  timeout_seconds: 60",
+                "  base_url: http://localhost:11434",
+                "  prompt:",
+                "    id: answer_correctness_v1",
+                "    version: v1",
+                "    template_path: prompts/judges/answer_correctness_v1.txt",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    built_clients: list[tuple[str, str, str | None]] = []
+
+    class FakeOllamaClient:
+        def __init__(self, config) -> None:
+            built_clients.append((config.provider, config.model_name, config.base_url))
+            self.config = config
+            self.calls = 0
+
+        def generate(self, prompt: str) -> LLMGenerationResult:
+            self.calls += 1
+            if self.calls == 2:
+                return LLMGenerationResult(
+                    text='{"verdict": "correct", "reason": "Matches."}',
+                    prompt_tokens=20,
+                    output_tokens=8,
+                )
+            return LLMGenerationResult(
+                text="ollama response",
+                prompt_tokens=10,
+                output_tokens=4,
+            )
+
+    monkeypatch.setattr("financebench_eval_harness.cli.OllamaLLMClient", FakeOllamaClient)
+
+    exit_code = main(
+        [
+            "run-eval",
+            "--config",
+            str(config_path),
+            "--run-id",
+            "ollama-cli-run",
+            "--limit",
+            "5",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Attempted: 1" in captured.out
+    assert built_clients == [
+        ("ollama", "llama3.2:3b", "http://localhost:11434"),
+        ("ollama", "llama3.2:3b", "http://localhost:11434"),
+    ]
 
 
 def _write_valid_questions(path: Path) -> None:

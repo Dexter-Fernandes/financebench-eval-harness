@@ -1,0 +1,12 @@
+evaluation:
+  modes:
+    closed_book:
+      prompt:
+        id: closed_book_v1
+        version: v1
+        template_path: prompts/baselines/closed_book_v1.txt
+    oracle_context:
+      prompt:
+        id: oracle_context_v1
+        version: v1
+        template_path: prompts/baselines/oracle_context_v1.txt
