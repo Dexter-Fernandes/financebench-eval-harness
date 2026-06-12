@@ -1,0 +1,6 @@
+retrieval:
+  chunking:
+    strategy: recursive_text
+    chunk_size: 800
+    chunk_overlap: 150
+    min_chunk_chars: 100

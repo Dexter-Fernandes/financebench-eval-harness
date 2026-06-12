@@ -10,6 +10,7 @@ class ChunkingConfig:
     chunk_size: int
     chunk_overlap: int
     strategy: str = "recursive_text"
+    min_chunk_chars: int = 0
 
 
 def chunk_page(
@@ -26,6 +27,8 @@ def chunk_page(
     chunks: list[Chunk] = []
     for idx, (start, end) in enumerate(spans):
         chunk_text = text[start:end]
+        if config.min_chunk_chars > 0 and len(chunk_text.strip()) < config.min_chunk_chars:
+            continue
         chunks.append(
             Chunk(
                 chunk_id=_make_chunk_id(page.doc_id, page.page_num, chunk_offset + idx),

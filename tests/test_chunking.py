@@ -71,6 +71,30 @@ class TestChunkPageEdgeCases:
         chunks = chunk_page(page, SMALL_CONFIG)
         assert chunks[0].text == text
 
+    def test_min_chunk_chars_default_is_zero(self) -> None:
+        cfg = ChunkingConfig(chunk_size=100, chunk_overlap=20)
+        assert cfg.min_chunk_chars == 0
+
+    def test_min_chunk_chars_drops_short_chunks(self) -> None:
+        # Create a page whose last natural chunk will be shorter than min_chunk_chars.
+        # "word " * 19 = 95 chars fits in one chunk of size 100; adding one more word
+        # would overflow into a second chunk of just "word " (5 chars).
+        # With min_chunk_chars=10, that tiny tail chunk must be dropped.
+        text = "word " * 19 + "x"  # 96 chars fits; add a single char to force a split
+        cfg = ChunkingConfig(chunk_size=50, chunk_overlap=5, min_chunk_chars=20)
+        page = make_page(text)
+        chunks = chunk_page(page, cfg)
+        assert all(len(c.text.strip()) >= cfg.min_chunk_chars for c in chunks)
+
+    def test_min_chunk_chars_zero_keeps_all_chunks(self) -> None:
+        cfg = ChunkingConfig(chunk_size=100, chunk_overlap=20, min_chunk_chars=0)
+        text = "word " * 200
+        page = make_page(text)
+        chunks_no_filter = chunk_page(page, cfg)
+        cfg_with_filter = ChunkingConfig(chunk_size=100, chunk_overlap=20, min_chunk_chars=0)
+        chunks_zero = chunk_page(page, cfg_with_filter)
+        assert len(chunks_no_filter) == len(chunks_zero)
+
 
 # ---------------------------------------------------------------------------
 # chunk_page — chunk content and structure
