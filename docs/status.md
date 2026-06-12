@@ -2,7 +2,7 @@
 
 ## Current State
 
-- M3 standalone retrieval pipeline is complete and review-clean on the `M3` branch.
+- M3 standalone retrieval pipeline is complete and merged to `main`.
 - All 421 tests pass (2 pre-existing Ollama skips).
 - Three-stage pipeline is runnable from a single config file:
   ```bash
@@ -19,12 +19,21 @@
 - Add hosted/frontier model support through provider abstractions once the local harness is reproducible.
 - Keep exact provider and model names configurable so comparisons use whichever models are available at evaluation time.
 
-## Next Engineering Milestone
+## Current Engineering Milestone
 
-- **M4**: wire retrieval into `run-eval` as a `retrieval_augmented` baseline mode.
-- Compare retrieval-backed vs. closed-book vs. oracle-context on the FinanceBench sample.
+- **M4**: implement `eval-retrieval` command to score retrieval quality across the FinanceBench sample.
+- Target command: `python -m financebench_eval eval-retrieval --config configs/retrieval.yaml`
+- Target output layout:
+  ```
+  runs/<run_id>/
+    retrieval_results.jsonl
+    retrieval_scores.jsonl
+    retrieval_summary.json
+    retrieval_eval_config.yaml
+  reports/
+    retrieval_eval_<run_id>.md
+  ```
 - Keep retrieval failures (no chunk / wrong chunk) separate from generation and scoring failures.
-- Merge `M3` → `main` before starting M4 work.
 
 ## Current Boundaries
 
