@@ -1,7 +1,10 @@
 from pathlib import Path
+from io import BytesIO
+from urllib.error import HTTPError
 
 import pytest
 
+import financebench_eval_harness.llm as llm_module
 from financebench_eval_harness.llm import (
     DEFAULT_LLM_CONFIG_PATH,
     LLMClient,
@@ -197,6 +200,36 @@ def test_ollama_llm_client_reports_missing_model_error() -> None:
         return {"error": "model 'missing-model' not found"}
 
     client = OllamaLLMClient(config, transport=missing_model_transport)
+
+    with pytest.raises(LLMProviderError) as exc_info:
+        client.generate("Prompt text")
+
+    assert "Ollama model not found: missing-model" in str(exc_info.value)
+
+
+def test_ollama_http_transport_preserves_missing_model_error_from_http_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = LLMGenerationConfig(
+        provider="ollama",
+        model_name="missing-model",
+        temperature=0.0,
+        max_tokens=64,
+        timeout_seconds=3.0,
+        base_url="http://localhost:11434",
+    )
+
+    def fake_urlopen(request, timeout: float):
+        raise HTTPError(
+            url=request.full_url,
+            code=404,
+            msg="Not Found",
+            hdrs=None,
+            fp=BytesIO(b"{\"error\":\"model 'missing-model' not found\"}"),
+        )
+
+    monkeypatch.setattr(llm_module.request, "urlopen", fake_urlopen)
+    client = OllamaLLMClient(config)
 
     with pytest.raises(LLMProviderError) as exc_info:
         client.generate("Prompt text")

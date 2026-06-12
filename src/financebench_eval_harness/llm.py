@@ -203,7 +203,7 @@ def _ollama_http_transport(
         if isinstance(decoded_error, dict):
             error = decoded_error.get("error")
             if isinstance(error, str) and error.strip():
-                raise LLMProviderError(f"Ollama request failed: {error}") from exc
+                return decoded_error
         raise LLMProviderError(
             f"Ollama HTTP error from {request_url}: {exc.code} {exc.reason}"
         ) from exc
