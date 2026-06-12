@@ -3,7 +3,7 @@ Evaluation harness for RAG and long-context LLMs on FinanceBench, focusing on an
 
 ## Current Scope
 
-The project is currently implementing PRD Milestone 1: local FinanceBench data layout, dataset validation, experiment metadata conventions, and a minimal run artefact shape.
+The project currently includes PRD Milestone 1 local FinanceBench data tooling and the M2 baseline evaluation path for `closed_book` and `oracle_context`, with mock-default evaluation plus opt-in local Ollama smoke runs.
 
 ## Expected Data Layout
 
@@ -154,4 +154,6 @@ python -m financebench_eval run-eval --config configs/evaluation/ollama_oracle_c
 These configs expect a local Ollama server at `http://localhost:11434` and use
 `llama3.2:3b` with `temperature: 0.0` for reproducible smoke checks. Both the
 answer model and judge model use Ollama in these opt-in configs. If the server
-is unavailable or the model is missing, the harness emits a readable error.
+is unavailable or the model is missing, the harness emits a readable error, and
+the opt-in smoke test is expected to fail immediately with that prerequisite
+message rather than silently skipping.
