@@ -16,11 +16,10 @@ def extract_numeric_values(text: str) -> list[float]:
     values: list[float] = []
     for match in _NUMERIC_PATTERN.finditer(text):
         raw_value = match.group(0)
-        is_parenthesized_negative = raw_value.startswith("(") and raw_value.endswith(")")
-        normalized_value = raw_value.strip("()%").replace("$", "").replace(",", "")
-        if is_parenthesized_negative:
-            normalized_value = f"-{normalized_value}"
-        values.append(float(normalized_value))
+        normalized_value = _normalize_numeric_token(raw_value)
+        if normalized_value is None:
+            continue
+        values.append(normalized_value)
     return values
 
 
@@ -72,6 +71,29 @@ def _numeric_values_match(
         )
         for gold_value in gold_numeric_values
     )
+
+
+def _normalize_numeric_token(raw_value: str) -> float | None:
+    is_parenthesized_negative = raw_value.startswith("(") and ")" in raw_value
+    has_minus_sign = "-" in raw_value
+    is_negative = is_parenthesized_negative or has_minus_sign
+
+    normalized_value = (
+        raw_value.replace("(", "")
+        .replace(")", "")
+        .replace("%", "")
+        .replace("$", "")
+        .replace(",", "")
+        .lstrip("-")
+    )
+    if not normalized_value:
+        return None
+    if is_negative:
+        normalized_value = f"-{normalized_value}"
+    try:
+        return float(normalized_value)
+    except ValueError:
+        return None
 
 
 __all__ = [

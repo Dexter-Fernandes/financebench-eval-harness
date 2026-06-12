@@ -33,6 +33,7 @@ def test_load_evaluation_run_config_reads_default_local_mock_config() -> None:
         temperature=0.0,
         max_tokens=512,
         timeout_seconds=30.0,
+        base_url=None,
     )
     assert config.judge == JudgeConfig(
         enabled=True,
@@ -42,6 +43,7 @@ def test_load_evaluation_run_config_reads_default_local_mock_config() -> None:
             temperature=0.0,
             max_tokens=256,
             timeout_seconds=30.0,
+            base_url=None,
         ),
         prompt=JudgePromptConfig(
             id="answer_correctness_v1",
@@ -67,6 +69,7 @@ def test_load_evaluation_run_config_reads_custom_model_and_mode(tmp_path: Path) 
                 "  temperature: 0.3",
                 "  max_tokens: 128",
                 "  timeout_seconds: 5",
+                "  base_url: http://localhost:11434",
             ]
         ),
         encoding="utf-8",
@@ -87,6 +90,7 @@ def test_load_evaluation_run_config_reads_custom_model_and_mode(tmp_path: Path) 
             temperature=0.3,
             max_tokens=128,
             timeout_seconds=5.0,
+            base_url="http://localhost:11434",
         ),
         judge=None,
     )
@@ -115,6 +119,7 @@ def test_load_evaluation_run_config_reads_enabled_judge_config(tmp_path: Path) -
                 "  temperature: 0.0",
                 "  max_tokens: 256",
                 "  timeout_seconds: 10",
+                "  base_url: http://localhost:11434",
                 "  prompt:",
                 "    id: answer_correctness_v1",
                 "    version: v1",
@@ -134,6 +139,7 @@ def test_load_evaluation_run_config_reads_enabled_judge_config(tmp_path: Path) -
             temperature=0.0,
             max_tokens=256,
             timeout_seconds=10.0,
+            base_url="http://localhost:11434",
         ),
         prompt=JudgePromptConfig(
             id="answer_correctness_v1",
@@ -141,6 +147,46 @@ def test_load_evaluation_run_config_reads_enabled_judge_config(tmp_path: Path) -
             template_path=Path("prompts/judges/answer_correctness_v1.txt"),
         ),
     )
+
+
+def test_load_evaluation_run_config_serializes_base_url_in_snapshot(tmp_path: Path) -> None:
+    config_path = tmp_path / "eval.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "eval:",
+                "  dataset_path: examples.jsonl",
+                "  output_dir: runs",
+                "  mode: closed_book",
+                "  limit: 1",
+                "model:",
+                "  provider: ollama",
+                "  model_name: answer-model",
+                "  temperature: 0.0",
+                "  max_tokens: 64",
+                "  timeout_seconds: 30",
+                "  base_url: http://localhost:11434",
+                "judge:",
+                "  enabled: true",
+                "  provider: ollama",
+                "  model_name: judge-model",
+                "  temperature: 0.0",
+                "  max_tokens: 32",
+                "  timeout_seconds: 10",
+                "  base_url: http://localhost:11434",
+                "  prompt:",
+                "    id: answer_correctness_v1",
+                "    version: v1",
+                "    template_path: prompts/judges/answer_correctness_v1.txt",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_evaluation_run_config(config_path)
+
+    assert config.to_dict()["model"]["base_url"] == "http://localhost:11434"
+    assert config.to_dict()["judge"]["base_url"] == "http://localhost:11434"
 
 
 def test_load_evaluation_run_config_reports_missing_enabled_judge_keys(

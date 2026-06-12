@@ -31,7 +31,7 @@ from financebench_eval_harness.llm import (
     LLMClient,
     LLMConfigError,
     MockLLMClient,
-    OllamaClient,
+    OllamaLLMClient,
 )
 from financebench_eval_harness.run import EvaluationRunError, run_evaluation_from_config
 from financebench_eval_harness.run_config import (
@@ -464,7 +464,7 @@ def _build_llm_client(run_config) -> LLMClient:
             responses=["mock response"] * run_config.settings.limit,
         )
     if run_config.model.provider == "ollama":
-        return OllamaClient(run_config.model)
+        return OllamaLLMClient(run_config.model)
     raise LLMConfigError(f"Unsupported LLM provider: {run_config.model.provider}")
 
 
@@ -480,7 +480,7 @@ def _build_judge_client(run_config) -> LLMClient | None:
             * run_config.settings.limit,
         )
     if run_config.judge.model.provider == "ollama":
-        return OllamaClient(run_config.judge.model)
+        return OllamaLLMClient(run_config.judge.model)
     raise LLMConfigError(
         f"Unsupported judge LLM provider: {run_config.judge.model.provider}"
     )

@@ -35,6 +35,25 @@ def test_extract_numeric_values_handles_financial_number_formats() -> None:
     ]
 
 
+def test_extract_numeric_values_handles_common_financial_negative_formats() -> None:
+    assert extract_numeric_values("Margin changes were (4.6)%, -$4.6, ($4.6), and -4.6%.") == [
+        -4.6,
+        -4.6,
+        -4.6,
+        -4.6,
+    ]
+
+
+def test_extract_numeric_values_handles_duplicate_minus_financial_output() -> None:
+    assert extract_numeric_values("The table shows --4.6% for translation.") == [-4.6]
+
+
+def test_extract_numeric_values_handles_mixed_table_summary_values() -> None:
+    assert extract_numeric_values(
+        "Organic sales were 1.2%, divestitures were (0.5)%, translation was --4.6%, and total sales change was (3.9)%."
+    ) == [1.2, -0.5, -4.6, -3.9]
+
+
 def test_score_prediction_matches_all_gold_numeric_values() -> None:
     score = score_prediction(
         gold_answer="$1,234.50 and 12.5%",

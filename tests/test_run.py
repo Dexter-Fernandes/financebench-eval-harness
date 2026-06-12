@@ -5,6 +5,7 @@ import yaml
 
 from financebench_eval_harness.evaluation import EvaluationMode
 from financebench_eval_harness.llm import (
+    LLMGenerationResult,
     LLMGenerationConfig,
     LLMProviderError,
     MockLLMClient,
@@ -55,6 +56,7 @@ def test_run_evaluation_with_mock_llm_writes_config_snapshot_predictions_and_sco
             "temperature": 0.0,
             "max_tokens": 512,
             "timeout_seconds": 30.0,
+            "base_url": None,
         },
     }
 
@@ -112,6 +114,7 @@ def test_run_evaluation_with_mock_llm_writes_config_snapshot_predictions_and_sco
     assert run_metadata["temperature"] == 0.0
     assert run_metadata["max_tokens"] == 512
     assert run_metadata["timeout_seconds"] == 30.0
+    assert run_metadata["base_url"] is None
     assert run_metadata["predictions_path"] == str(result.predictions_path)
     assert run_metadata["scores_path"] == str(result.scores_path)
     assert run_metadata["prediction_filename"] == "predictions.jsonl"
@@ -190,14 +193,18 @@ def test_run_evaluation_writes_each_output_before_next_generation(tmp_path: Path
             self.config = config.model
             self.calls = 0
 
-        def generate(self, prompt: str) -> str:
+        def generate(self, prompt: str) -> LLMGenerationResult:
             self.calls += 1
             predictions_path = tmp_path / "runs" / "streamed-run" / "predictions.jsonl"
             if self.calls == 2:
                 rows = _read_jsonl(predictions_path)
                 assert [row["question_id"] for row in rows] == ["q0"]
                 assert rows[0]["status"] == "success"
-            return f"answer {self.calls}"
+            return LLMGenerationResult(
+                text=f"answer {self.calls}",
+                prompt_tokens=None,
+                output_tokens=None,
+            )
 
     result = run_evaluation_from_config(
         config,
@@ -226,11 +233,15 @@ def test_run_evaluation_records_llm_error_and_continues(tmp_path: Path) -> None:
             self.config = config.model
             self.calls = 0
 
-        def generate(self, prompt: str) -> str:
+        def generate(self, prompt: str) -> LLMGenerationResult:
             self.calls += 1
             if self.calls == 2:
                 raise LLMProviderError("provider timeout")
-            return f"answer {self.calls}"
+            return LLMGenerationResult(
+                text=f"answer {self.calls}",
+                prompt_tokens=None,
+                output_tokens=None,
+            )
 
     result = run_evaluation_from_config(
         config,
@@ -256,6 +267,75 @@ def test_run_evaluation_records_llm_error_and_continues(tmp_path: Path) -> None:
     assert score_rows[1]["scores"]["exact_match"] is False
     assert score_rows[1]["scores"]["numeric_match"] is False
     assert rows[2]["question_id"] == "q2"
+
+
+def test_run_evaluation_records_provider_token_counts(tmp_path: Path) -> None:
+    dataset_path = tmp_path / "examples.jsonl"
+    _write_processed_examples(dataset_path, count=1)
+    config = _run_config(
+        dataset_path=dataset_path,
+        output_dir=tmp_path / "runs",
+        mode=EvaluationMode.CLOSED_BOOK,
+        limit=1,
+        model_name="ollama-model",
+    )
+
+    class TokenReportingLLM:
+        def __init__(self) -> None:
+            self.config = config.model
+
+        def generate(self, prompt: str) -> LLMGenerationResult:
+            return LLMGenerationResult(
+                text="answer with usage",
+                prompt_tokens=42,
+                output_tokens=11,
+            )
+
+    result = run_evaluation_from_config(
+        config,
+        TokenReportingLLM(),
+        run_id="token-run",
+    )
+
+    rows = _read_jsonl(result.predictions_path)
+    assert rows[0]["prediction"] == "answer with usage"
+    assert rows[0]["input_tokens"] == 42
+    assert rows[0]["output_tokens"] == 11
+
+
+def test_run_evaluation_does_not_crash_on_duplicate_minus_numeric_output(
+    tmp_path: Path,
+) -> None:
+    dataset_path = tmp_path / "examples.jsonl"
+    _write_processed_examples(dataset_path, count=1)
+    config = _run_config(
+        dataset_path=dataset_path,
+        output_dir=tmp_path / "runs",
+        mode=EvaluationMode.ORACLE_CONTEXT,
+        limit=1,
+        model_name="ollama-model",
+    )
+
+    class DuplicateMinusLLM:
+        def __init__(self) -> None:
+            self.config = config.model
+
+        def generate(self, prompt: str) -> LLMGenerationResult:
+            return LLMGenerationResult(
+                text="Translation was --4.6% and total sales change was (3.9)%.",
+                prompt_tokens=None,
+                output_tokens=None,
+            )
+
+    result = run_evaluation_from_config(
+        config,
+        DuplicateMinusLLM(),
+        run_id="duplicate-minus-run",
+    )
+
+    score_rows = _read_jsonl(result.scores_path)
+    assert score_rows[0]["status"] == "success"
+    assert score_rows[0]["scores"]["prediction_numeric_values"] == [-4.6, -3.9]
 
 
 def test_run_evaluation_attaches_successful_judge_result(tmp_path: Path) -> None:
@@ -313,6 +393,7 @@ def test_run_evaluation_attaches_successful_judge_result(tmp_path: Path) -> None
         "temperature": 0.0,
         "max_tokens": 256,
         "timeout_seconds": 30.0,
+        "base_url": None,
         "prompt_id": "answer_correctness_v1",
         "prompt_version": "v1",
         "prompt_template_path": str(prompt_path),
@@ -406,6 +487,7 @@ def _run_config(
             temperature=0.0,
             max_tokens=512,
             timeout_seconds=30.0,
+            base_url=None,
         ),
         judge=judge,
     )

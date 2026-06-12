@@ -103,12 +103,17 @@ def run_evaluation_from_config(
             error: str | None = None
             started_at = perf_counter()
             try:
-                prediction = llm_client.generate(rendered_prompt.text)
+                generation = llm_client.generate(rendered_prompt.text)
+                prediction = generation.text
+                input_tokens = generation.prompt_tokens
+                output_tokens = generation.output_tokens
                 success_count += 1
             except LLMProviderError as exc:
                 status = "error"
                 error = str(exc)
                 error_count += 1
+                input_tokens = None
+                output_tokens = None
             latency_ms = int(round((perf_counter() - started_at) * 1000))
             gold_answer = _string_field(example, "gold_answer")
             score = score_prediction(gold_answer, prediction)
@@ -149,8 +154,8 @@ def run_evaluation_from_config(
                 "prompt_version": rendered_prompt.prompt_version,
                 "prompt": rendered_prompt.text,
                 "latency_ms": latency_ms,
-                "input_tokens": None,
-                "output_tokens": None,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
                 "status": status,
                 "error": error,
             }
@@ -188,6 +193,7 @@ def run_evaluation_from_config(
         "temperature": config.model.temperature,
         "max_tokens": config.model.max_tokens,
         "timeout_seconds": config.model.timeout_seconds,
+        "base_url": config.model.base_url,
         "predictions_path": str(predictions_path),
         "scores_path": str(scores_path),
         "prediction_filename": predictions_path.name,
@@ -240,7 +246,7 @@ def _score_with_judge(
             example,
             prediction=prediction,
         )
-        raw_response = judge_client.generate(rendered_prompt.text)
+        raw_response = judge_client.generate(rendered_prompt.text).text
         parsed_response = parse_judge_response(raw_response)
         verdict = parsed_response["verdict"]
         reason = parsed_response["reason"]
@@ -274,6 +280,7 @@ def _judge_metadata(config: EvaluationRunConfig) -> dict[str, object]:
         "temperature": config.judge.model.temperature,
         "max_tokens": config.judge.model.max_tokens,
         "timeout_seconds": config.judge.model.timeout_seconds,
+        "base_url": config.judge.model.base_url,
         "prompt_id": config.judge.prompt.id,
         "prompt_version": config.judge.prompt.version,
         "prompt_template_path": str(config.judge.prompt.template_path),

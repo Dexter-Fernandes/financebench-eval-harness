@@ -7,8 +7,10 @@ from financebench_eval_harness.llm import (
     LLMClient,
     LLMConfigError,
     LLMGenerationConfig,
+    LLMGenerationResult,
     MockLLMClient,
-    OllamaClient,
+    LLMProviderError,
+    OllamaLLMClient,
     load_llm_config,
 )
 
@@ -18,10 +20,11 @@ def test_load_llm_config_reads_default_generation_settings() -> None:
 
     assert DEFAULT_LLM_CONFIG_PATH == Path("configs/llm/local.yaml")
     assert config.provider == "ollama"
-    assert config.model_name
+    assert config.model_name == "llama3.2:3b"
     assert config.temperature == 0.0
     assert config.max_tokens == 512
-    assert config.timeout_seconds == 30.0
+    assert config.timeout_seconds == 60.0
+    assert config.base_url == "http://localhost:11434"
 
 
 def test_load_llm_config_reads_custom_model_settings(tmp_path: Path) -> None:
@@ -35,6 +38,7 @@ def test_load_llm_config_reads_custom_model_settings(tmp_path: Path) -> None:
                 "  temperature: 0.2",
                 "  max_tokens: 128",
                 "  timeout_seconds: 5",
+                "  base_url: http://localhost:11434",
             ]
         ),
         encoding="utf-8",
@@ -48,6 +52,7 @@ def test_load_llm_config_reads_custom_model_settings(tmp_path: Path) -> None:
         temperature=0.2,
         max_tokens=128,
         timeout_seconds=5.0,
+        base_url="http://localhost:11434",
     )
 
 
@@ -81,15 +86,20 @@ def test_mock_llm_client_implements_generate_without_api_call() -> None:
         temperature=0.0,
         max_tokens=32,
         timeout_seconds=1.0,
+        base_url=None,
     )
     client: LLMClient = MockLLMClient(config, responses=["first answer"])
 
-    assert client.generate("Question?") == "first answer"
+    assert client.generate("Question?") == LLMGenerationResult(
+        text="first answer",
+        prompt_tokens=None,
+        output_tokens=None,
+    )
     assert client.calls == ["Question?"]
     assert client.config == config
 
 
-def test_ollama_client_generate_uses_configured_model_settings() -> None:
+def test_ollama_llm_client_generate_uses_configured_model_settings() -> None:
     requests: list[dict[str, object]] = []
     config = LLMGenerationConfig(
         provider="ollama",
@@ -97,17 +107,37 @@ def test_ollama_client_generate_uses_configured_model_settings() -> None:
         temperature=0.25,
         max_tokens=64,
         timeout_seconds=3.0,
+        base_url="http://localhost:11434",
     )
 
-    def fake_transport(payload: dict[str, object], timeout_seconds: float) -> dict[str, str]:
-        requests.append({"payload": payload, "timeout_seconds": timeout_seconds})
-        return {"response": "generated answer"}
+    def fake_transport(
+        request_url: str,
+        payload: dict[str, object],
+        timeout_seconds: float,
+    ) -> dict[str, object]:
+        requests.append(
+            {
+                "request_url": request_url,
+                "payload": payload,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+        return {
+            "response": "generated answer",
+            "prompt_eval_count": 17,
+            "eval_count": 9,
+        }
 
-    client = OllamaClient(config, transport=fake_transport)
+    client = OllamaLLMClient(config, transport=fake_transport)
 
-    assert client.generate("Prompt text") == "generated answer"
+    assert client.generate("Prompt text") == LLMGenerationResult(
+        text="generated answer",
+        prompt_tokens=17,
+        output_tokens=9,
+    )
     assert requests == [
         {
+            "request_url": "http://localhost:11434/api/generate",
             "payload": {
                 "model": "local-finance-model",
                 "prompt": "Prompt text",
@@ -120,3 +150,55 @@ def test_ollama_client_generate_uses_configured_model_settings() -> None:
             "timeout_seconds": 3.0,
         }
     ]
+
+
+def test_ollama_llm_client_reports_server_connection_error() -> None:
+    config = LLMGenerationConfig(
+        provider="ollama",
+        model_name="local-finance-model",
+        temperature=0.0,
+        max_tokens=64,
+        timeout_seconds=3.0,
+        base_url="http://localhost:11434",
+    )
+
+    def failing_transport(
+        request_url: str,
+        payload: dict[str, object],
+        timeout_seconds: float,
+    ) -> dict[str, object]:
+        raise LLMProviderError("Could not reach Ollama server at http://localhost:11434")
+
+    client = OllamaLLMClient(config, transport=failing_transport)
+
+    with pytest.raises(LLMProviderError) as exc_info:
+        client.generate("Prompt text")
+
+    assert "Could not reach Ollama server at http://localhost:11434" in str(
+        exc_info.value
+    )
+
+
+def test_ollama_llm_client_reports_missing_model_error() -> None:
+    config = LLMGenerationConfig(
+        provider="ollama",
+        model_name="missing-model",
+        temperature=0.0,
+        max_tokens=64,
+        timeout_seconds=3.0,
+        base_url="http://localhost:11434",
+    )
+
+    def missing_model_transport(
+        request_url: str,
+        payload: dict[str, object],
+        timeout_seconds: float,
+    ) -> dict[str, object]:
+        return {"error": "model 'missing-model' not found"}
+
+    client = OllamaLLMClient(config, transport=missing_model_transport)
+
+    with pytest.raises(LLMProviderError) as exc_info:
+        client.generate("Prompt text")
+
+    assert "Ollama model not found: missing-model" in str(exc_info.value)

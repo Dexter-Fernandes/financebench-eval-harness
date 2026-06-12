@@ -6,6 +6,7 @@ import yaml
 
 import financebench_eval_harness.data as data_module
 from financebench_eval_harness.cli import main
+from financebench_eval_harness.llm import LLMGenerationResult
 
 
 def test_validate_data_command_succeeds_for_expected_layout(
@@ -794,6 +795,102 @@ def test_report_baseline_command_writes_markdown_report(
     assert "Incorrect: 1" in captured.out
     assert captured.err == ""
     assert "| Accuracy estimate | 50% |" in report_path.read_text(encoding="utf-8")
+
+
+def test_run_eval_builds_ollama_clients_from_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    examples_path = tmp_path / "examples.jsonl"
+    output_dir = tmp_path / "runs"
+    config_path = tmp_path / "eval.yaml"
+    _write_pages(
+        examples_path,
+        [
+            {
+                "question_id": "q1",
+                "question": "What is revenue?",
+                "gold_answer": "$123",
+                "evidence": [{"evidence_text": "Revenue was $123."}],
+            }
+        ],
+    )
+    config_path.write_text(
+        "\n".join(
+            [
+                "eval:",
+                f"  dataset_path: {examples_path}",
+                f"  output_dir: {output_dir}",
+                "  mode: closed_book",
+                "  limit: 9",
+                "model:",
+                "  provider: ollama",
+                "  model_name: llama3.2:3b",
+                "  temperature: 0.0",
+                "  max_tokens: 512",
+                "  timeout_seconds: 60",
+                "  base_url: http://localhost:11434",
+                "judge:",
+                "  enabled: true",
+                "  provider: ollama",
+                "  model_name: llama3.2:3b",
+                "  temperature: 0.0",
+                "  max_tokens: 256",
+                "  timeout_seconds: 60",
+                "  base_url: http://localhost:11434",
+                "  prompt:",
+                "    id: answer_correctness_v1",
+                "    version: v1",
+                "    template_path: prompts/judges/answer_correctness_v1.txt",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    built_clients: list[tuple[str, str, str | None]] = []
+
+    class FakeOllamaClient:
+        def __init__(self, config) -> None:
+            built_clients.append((config.provider, config.model_name, config.base_url))
+            self.config = config
+            self.calls = 0
+
+        def generate(self, prompt: str) -> LLMGenerationResult:
+            self.calls += 1
+            if self.calls == 2:
+                return LLMGenerationResult(
+                    text='{"verdict": "correct", "reason": "Matches."}',
+                    prompt_tokens=20,
+                    output_tokens=8,
+                )
+            return LLMGenerationResult(
+                text="ollama response",
+                prompt_tokens=10,
+                output_tokens=4,
+            )
+
+    monkeypatch.setattr("financebench_eval_harness.cli.OllamaLLMClient", FakeOllamaClient)
+
+    exit_code = main(
+        [
+            "run-eval",
+            "--config",
+            str(config_path),
+            "--run-id",
+            "ollama-cli-run",
+            "--limit",
+            "5",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Attempted: 1" in captured.out
+    assert built_clients == [
+        ("ollama", "llama3.2:3b", "http://localhost:11434"),
+        ("ollama", "llama3.2:3b", "http://localhost:11434"),
+    ]
 
 
 def _write_valid_questions(path: Path) -> None:

@@ -117,9 +117,11 @@ template path so future run artefacts can record which prompt was used.
 
 LLM calls should go through the shared provider interface in
 `financebench_eval_harness.llm` rather than calling a provider directly. The
-default local config lives at `configs/llm/local.yaml` and records provider,
-model name, temperature, max tokens, and timeout settings. Tests can use
-`MockLLMClient` to exercise harness code without making API calls.
+default local LLM config lives at `configs/llm/local.yaml` and records provider,
+model name, temperature, max tokens, timeout settings, and optional Ollama
+`base_url`. Evaluation and CI still default to the mock provider via
+`configs/evaluation/local_mock.yaml`. Tests can use `MockLLMClient` to exercise
+harness code without making API calls.
 
 ## Run A Mock Evaluation
 
@@ -138,3 +140,18 @@ judge scores, and `run_metadata.json` with run-level settings and counts. The
 baseline command also writes `reports/baseline_<run_id>.md`. Change
 `eval.mode`, `eval.limit`, or the `model` settings in the YAML file to compare
 configurations without editing code.
+
+## Run An Optional Local Ollama Smoke Baseline
+
+Mock remains the default committed baseline for tests and CI. For a cheap local
+smoke run against a real model, use one of the dedicated Ollama configs:
+
+```bash
+python -m financebench_eval run-eval --config configs/evaluation/ollama_closed_book.yaml --limit 5
+python -m financebench_eval run-eval --config configs/evaluation/ollama_oracle_context.yaml --limit 5
+```
+
+These configs expect a local Ollama server at `http://localhost:11434` and use
+`llama3.2:3b` with `temperature: 0.0` for reproducible smoke checks. Both the
+answer model and judge model use Ollama in these opt-in configs. If the server
+is unavailable or the model is missing, the harness emits a readable error.

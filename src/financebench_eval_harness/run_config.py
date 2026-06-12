@@ -73,6 +73,7 @@ class EvaluationRunConfig:
                 "temperature": self.model.temperature,
                 "max_tokens": self.model.max_tokens,
                 "timeout_seconds": self.model.timeout_seconds,
+                "base_url": self.model.base_url,
             },
         }
         if self.judge is not None:
@@ -83,6 +84,7 @@ class EvaluationRunConfig:
                 "temperature": self.judge.model.temperature,
                 "max_tokens": self.judge.model.max_tokens,
                 "timeout_seconds": self.judge.model.timeout_seconds,
+                "base_url": self.judge.model.base_url,
                 "prompt": {
                     "id": self.judge.prompt.id,
                     "version": self.judge.prompt.version,
@@ -147,6 +149,7 @@ def load_evaluation_run_config(
                 model_config,
                 "timeout_seconds",
             ),
+            base_url=_optional_string_from_mapping(model_config, "base_url"),
         ),
         judge=judge_config,
     )
@@ -217,6 +220,7 @@ def _judge_config_from_mapping(raw_judge_config: Any) -> JudgeConfig | None:
                 raw_judge_config,
                 "timeout_seconds",
             ),
+            base_url=_optional_string_from_mapping(raw_judge_config, "base_url"),
         ),
         prompt=JudgePromptConfig(
             id=_string_from_mapping(prompt_config, "id"),
@@ -254,6 +258,12 @@ def _float_from_mapping(config: dict[str, Any], key: str) -> float:
             f"Evaluation run config key '{key}' must be a number"
         )
     return float(value)
+
+
+def _optional_string_from_mapping(config: dict[str, Any], key: str) -> str | None:
+    if key not in config or config[key] is None:
+        return None
+    return _string_from_mapping(config, key)
 
 
 def _positive_float_from_mapping(config: dict[str, Any], key: str) -> float:
