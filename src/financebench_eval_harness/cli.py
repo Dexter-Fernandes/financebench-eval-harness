@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Sequence
 
 from financebench_eval_harness.chunking import chunk_pages
+from financebench_eval_harness.inspection import InspectionError, format_inspection, load_inspection
 from financebench_eval_harness.retriever import Question, next_run_dir, run_retrieval
 from financebench_eval_harness.embedding import (
     EmbeddingConfig,
@@ -291,6 +292,34 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Path to the chunks JSONL used to build the index (recorded in run metadata).",
+    )
+
+    inspect_parser = subparsers.add_parser(
+        "inspect-retrieval",
+        help="Inspect retrieved chunks for one question from a completed run.",
+    )
+    inspect_parser.add_argument(
+        "--question-id",
+        required=True,
+        help="Question ID to inspect.",
+    )
+    inspect_parser.add_argument(
+        "--run",
+        type=Path,
+        required=True,
+        help="Run directory containing retrieval_results.jsonl.",
+    )
+    inspect_parser.add_argument(
+        "--examples",
+        type=Path,
+        default=None,
+        help="Examples JSONL path (default: read dataset_path from run_metadata.json).",
+    )
+    inspect_parser.add_argument(
+        "--preview-chars",
+        type=int,
+        default=300,
+        help="Characters of chunk text to show per result (default: 300).",
     )
 
     return parser
@@ -644,6 +673,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Results written to {result.output_path}.")
         if result.metadata_path:
             print(f"Run metadata written to {result.metadata_path}.")
+        return 0
+
+    if args.command == "inspect-retrieval":
+        try:
+            inspection = load_inspection(
+                args.question_id,
+                args.run,
+                examples_path=args.examples,
+            )
+        except InspectionError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(format_inspection(inspection, preview_chars=args.preview_chars))
         return 0
 
     parser.error(f"Unknown command: {args.command}")

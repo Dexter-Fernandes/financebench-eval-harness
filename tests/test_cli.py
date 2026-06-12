@@ -1751,3 +1751,127 @@ def test_retrieve_command_auto_output_prints_run_dir(tmp_path: Path, capsys) -> 
 
     out = capsys.readouterr().out
     assert "run_001" in out
+
+
+# ---------------------------------------------------------------------------
+# inspect-retrieval command helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_retrieval_run(tmp_path: Path, *, with_examples: bool = False) -> Path:
+    """Create a minimal run directory with retrieval_results.jsonl."""
+    run_dir = tmp_path / "run_001"
+    run_dir.mkdir()
+
+    results = [
+        {
+            "question_id": "q001",
+            "query": "What was total revenue?",
+            "retrieved": [
+                {
+                    "rank": 1,
+                    "chunk_id": "DOC_p001_c000",
+                    "doc_name": "DOC.pdf",
+                    "page_num": 1,
+                    "score": 0.82,
+                    "text": "Revenue was $4.2 billion for the fiscal year.",
+                }
+            ],
+        }
+    ]
+    (run_dir / "retrieval_results.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in results) + "\n", encoding="utf-8"
+    )
+
+    if with_examples:
+        examples = [
+            {
+                "question_id": "q001",
+                "question": "What was total revenue for the year?",
+                "evidence": [
+                    {
+                        "doc_name": "DOC.pdf",
+                        "matched_page_num": 1,
+                        "evidence_text": "Revenue was $4.2 billion for the fiscal year.",
+                    }
+                ],
+            }
+        ]
+        examples_path = tmp_path / "examples.jsonl"
+        examples_path.write_text(
+            "\n".join(json.dumps(e) for e in examples) + "\n", encoding="utf-8"
+        )
+        (run_dir / "run_metadata.json").write_text(
+            json.dumps({"run_id": "r", "dataset_path": str(examples_path)}),
+            encoding="utf-8",
+        )
+
+    return run_dir
+
+
+# ---------------------------------------------------------------------------
+# inspect-retrieval command
+# ---------------------------------------------------------------------------
+
+
+def test_inspect_retrieval_exits_zero(tmp_path: Path, capsys) -> None:
+    run_dir = _build_retrieval_run(tmp_path)
+
+    exit_code = main([
+        "inspect-retrieval",
+        "--question-id", "q001",
+        "--run", str(run_dir),
+    ])
+
+    assert exit_code == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_inspect_retrieval_output_contains_question_text(tmp_path: Path, capsys) -> None:
+    run_dir = _build_retrieval_run(tmp_path, with_examples=True)
+
+    main([
+        "inspect-retrieval",
+        "--question-id", "q001",
+        "--run", str(run_dir),
+    ])
+
+    out = capsys.readouterr().out
+    assert "What was total revenue for the year?" in out
+
+
+def test_inspect_retrieval_output_contains_chunk_score(tmp_path: Path, capsys) -> None:
+    run_dir = _build_retrieval_run(tmp_path)
+
+    main([
+        "inspect-retrieval",
+        "--question-id", "q001",
+        "--run", str(run_dir),
+    ])
+
+    out = capsys.readouterr().out
+    assert "0.82" in out
+
+
+def test_inspect_retrieval_fails_when_run_dir_missing(tmp_path: Path, capsys) -> None:
+    exit_code = main([
+        "inspect-retrieval",
+        "--question-id", "q001",
+        "--run", str(tmp_path / "nonexistent"),
+    ])
+
+    assert exit_code == 1
+    assert capsys.readouterr().err != ""
+
+
+def test_inspect_retrieval_fails_when_question_id_not_found(tmp_path: Path, capsys) -> None:
+    run_dir = _build_retrieval_run(tmp_path)
+
+    exit_code = main([
+        "inspect-retrieval",
+        "--question-id", "q999",
+        "--run", str(run_dir),
+    ])
+
+    assert exit_code == 1
+    assert capsys.readouterr().err != ""
