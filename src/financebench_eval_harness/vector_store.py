@@ -11,7 +11,7 @@ from financebench_eval_harness.retrieval_types import Chunk, RetrievalResult
 
 
 _INDEX_FILE = "index.faiss"
-_CHUNKS_FILE = "chunks.jsonl"
+_CHUNKS_FILE = "chunk_metadata.jsonl"
 
 
 class VectorStore(Protocol):

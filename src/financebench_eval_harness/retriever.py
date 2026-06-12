@@ -14,7 +14,7 @@ from financebench_eval_harness.vector_store import FaissVectorStore
 if TYPE_CHECKING:
     from financebench_eval_harness.index_builder import IndexMetadata
 
-_METADATA_FILE = "run_metadata.json"
+_METADATA_FILE = "retrieval_run_metadata.json"
 
 
 @dataclass(frozen=True)

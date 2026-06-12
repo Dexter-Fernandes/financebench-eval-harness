@@ -1563,7 +1563,7 @@ def test_retrieve_command_writes_run_metadata_json(tmp_path: Path, capsys) -> No
         "--run-id", "test-run",
     ])
 
-    assert (tmp_path / "run_001" / "run_metadata.json").is_file()
+    assert (tmp_path / "run_001" / "retrieval_run_metadata.json").is_file()
 
 
 def test_retrieve_command_metadata_contains_provided_run_id(tmp_path: Path, capsys) -> None:
@@ -1583,7 +1583,7 @@ def test_retrieve_command_metadata_contains_provided_run_id(tmp_path: Path, caps
         "--run-id", "my-custom-run",
     ])
 
-    d = json.loads((tmp_path / "run_001" / "run_metadata.json").read_text())
+    d = json.loads((tmp_path / "run_001" / "retrieval_run_metadata.json").read_text())
     assert d["run_id"] == "my-custom-run"
 
 
@@ -1603,7 +1603,7 @@ def test_retrieve_command_metadata_auto_generates_run_id(tmp_path: Path, capsys)
         "--output", str(output_path),
     ])
 
-    d = json.loads((tmp_path / "run_001" / "run_metadata.json").read_text())
+    d = json.loads((tmp_path / "run_001" / "retrieval_run_metadata.json").read_text())
     assert isinstance(d["run_id"], str) and d["run_id"]
 
 
@@ -1624,7 +1624,7 @@ def test_retrieve_command_metadata_contains_dataset_path(tmp_path: Path, capsys)
         "--run-id", "r",
     ])
 
-    d = json.loads((tmp_path / "run_001" / "run_metadata.json").read_text())
+    d = json.loads((tmp_path / "run_001" / "retrieval_run_metadata.json").read_text())
     assert d["dataset_path"] == str(questions_path)
 
 
@@ -1646,7 +1646,7 @@ def test_retrieve_command_metadata_contains_top_k(tmp_path: Path, capsys) -> Non
         "--run-id", "r",
     ])
 
-    d = json.loads((tmp_path / "run_001" / "run_metadata.json").read_text())
+    d = json.loads((tmp_path / "run_001" / "retrieval_run_metadata.json").read_text())
     assert d["top_k"] == 3
 
 
@@ -1667,7 +1667,7 @@ def test_retrieve_command_metadata_contains_chunk_size_and_overlap(tmp_path: Pat
         "--run-id", "r",
     ])
 
-    d = json.loads((tmp_path / "run_001" / "run_metadata.json").read_text())
+    d = json.loads((tmp_path / "run_001" / "retrieval_run_metadata.json").read_text())
     assert isinstance(d["chunk_size"], int)
     assert isinstance(d["chunk_overlap"], int)
 
@@ -1875,3 +1875,228 @@ def test_inspect_retrieval_fails_when_question_id_not_found(tmp_path: Path, caps
 
     assert exit_code == 1
     assert capsys.readouterr().err != ""
+
+
+# ---------------------------------------------------------------------------
+# --config pipeline helpers
+# ---------------------------------------------------------------------------
+
+
+def _write_pipeline_config(
+    path: Path,
+    *,
+    pages_path: Path,
+    chunks_path: Path,
+    index_dir: Path,
+    questions_path: Path,
+    runs_dir: Path,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join([
+            "retrieval:",
+            f"  pages_path: {pages_path}",
+            f"  chunks_path: {chunks_path}",
+            f"  index_dir: {index_dir}",
+            f"  questions_path: {questions_path}",
+            f"  runs_dir: {runs_dir}",
+            "  top_k: 3",
+            "  chunking:",
+            "    strategy: recursive_text",
+            "    chunk_size: 200",
+            "    chunk_overlap: 20",
+            "    min_chunk_chars: 10",
+            "  embedding:",
+            "    provider: mock",
+            "    model_name: mock-embed",
+            "    batch_size: 32",
+        ]),
+        encoding="utf-8",
+    )
+
+
+# ---------------------------------------------------------------------------
+# chunk-documents command
+# ---------------------------------------------------------------------------
+
+
+def test_chunk_documents_exits_zero(tmp_path: Path, capsys) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    chunks_path = tmp_path / "chunks" / "chunks.jsonl"
+    config_path = tmp_path / "retrieval.yaml"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_pipeline_config(
+        config_path,
+        pages_path=pages_path,
+        chunks_path=chunks_path,
+        index_dir=tmp_path / "idx",
+        questions_path=tmp_path / "q.jsonl",
+        runs_dir=tmp_path / "runs",
+    )
+
+    exit_code = main(["chunk-documents", "--config", str(config_path)])
+
+    assert exit_code == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_chunk_documents_writes_chunks_jsonl(tmp_path: Path, capsys) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    chunks_path = tmp_path / "chunks.jsonl"
+    config_path = tmp_path / "retrieval.yaml"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_pipeline_config(
+        config_path,
+        pages_path=pages_path,
+        chunks_path=chunks_path,
+        index_dir=tmp_path / "idx",
+        questions_path=tmp_path / "q.jsonl",
+        runs_dir=tmp_path / "runs",
+    )
+
+    main(["chunk-documents", "--config", str(config_path)])
+
+    assert chunks_path.is_file()
+    rows = _read_jsonl(chunks_path)
+    assert len(rows) >= len(_SAMPLE_PAGES)
+    assert all("chunk_id" in r and "text" in r and "doc_name" in r for r in rows)
+
+
+def test_chunk_documents_output_has_page_provenance(tmp_path: Path, capsys) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    chunks_path = tmp_path / "chunks.jsonl"
+    config_path = tmp_path / "retrieval.yaml"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_pipeline_config(
+        config_path,
+        pages_path=pages_path,
+        chunks_path=chunks_path,
+        index_dir=tmp_path / "idx",
+        questions_path=tmp_path / "q.jsonl",
+        runs_dir=tmp_path / "runs",
+    )
+
+    main(["chunk-documents", "--config", str(config_path)])
+
+    rows = _read_jsonl(chunks_path)
+    assert all(isinstance(r["page_num"], int) for r in rows)
+    doc_names = {r["doc_name"] for r in rows}
+    assert "ACME_2022_10K.pdf" in doc_names
+
+
+# ---------------------------------------------------------------------------
+# build-index --config
+# ---------------------------------------------------------------------------
+
+
+def test_build_index_config_exits_zero(tmp_path: Path, capsys) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    chunks_path = tmp_path / "chunks.jsonl"
+    index_dir = tmp_path / "idx"
+    config_path = tmp_path / "retrieval.yaml"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_pipeline_config(
+        config_path,
+        pages_path=pages_path,
+        chunks_path=chunks_path,
+        index_dir=index_dir,
+        questions_path=tmp_path / "q.jsonl",
+        runs_dir=tmp_path / "runs",
+    )
+    main(["chunk-documents", "--config", str(config_path)])
+
+    exit_code = main(["build-index", "--config", str(config_path)])
+
+    assert exit_code == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_build_index_config_writes_index_files(tmp_path: Path, capsys) -> None:
+    pages_path = tmp_path / "pages.jsonl"
+    chunks_path = tmp_path / "chunks.jsonl"
+    index_dir = tmp_path / "idx"
+    config_path = tmp_path / "retrieval.yaml"
+    _write_pages_jsonl(pages_path, _SAMPLE_PAGES)
+    _write_pipeline_config(
+        config_path,
+        pages_path=pages_path,
+        chunks_path=chunks_path,
+        index_dir=index_dir,
+        questions_path=tmp_path / "q.jsonl",
+        runs_dir=tmp_path / "runs",
+    )
+    main(["chunk-documents", "--config", str(config_path)])
+    main(["build-index", "--config", str(config_path)])
+
+    assert (index_dir / "index.faiss").is_file()
+    assert (index_dir / "chunk_metadata.jsonl").is_file()
+    assert (index_dir / "index_metadata.json").is_file()
+
+
+# ---------------------------------------------------------------------------
+# retrieve --config
+# ---------------------------------------------------------------------------
+
+
+def test_retrieve_config_exits_zero(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "q.jsonl"
+    runs_dir = tmp_path / "runs"
+    config_path = tmp_path / "retrieval.yaml"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_pipeline_config(
+        config_path,
+        pages_path=tmp_path / "pages.jsonl",
+        chunks_path=tmp_path / "chunks.jsonl",
+        index_dir=index_dir,
+        questions_path=questions_path,
+        runs_dir=runs_dir,
+    )
+
+    exit_code = main(["retrieve", "--config", str(config_path)])
+
+    assert exit_code == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_retrieve_config_writes_retrieval_run_metadata(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "q.jsonl"
+    runs_dir = tmp_path / "runs"
+    config_path = tmp_path / "retrieval.yaml"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_pipeline_config(
+        config_path,
+        pages_path=tmp_path / "pages.jsonl",
+        chunks_path=tmp_path / "chunks.jsonl",
+        index_dir=index_dir,
+        questions_path=questions_path,
+        runs_dir=runs_dir,
+    )
+
+    main(["retrieve", "--config", str(config_path)])
+
+    run_dirs = sorted((runs_dir).iterdir())
+    assert len(run_dirs) == 1
+    assert (run_dirs[0] / "retrieval_run_metadata.json").is_file()
+
+
+def test_retrieve_config_writes_config_yaml_to_run_dir(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "q.jsonl"
+    runs_dir = tmp_path / "runs"
+    config_path = tmp_path / "retrieval.yaml"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_pipeline_config(
+        config_path,
+        pages_path=tmp_path / "pages.jsonl",
+        chunks_path=tmp_path / "chunks.jsonl",
+        index_dir=index_dir,
+        questions_path=questions_path,
+        runs_dir=runs_dir,
+    )
+
+    main(["retrieve", "--config", str(config_path)])
+
+    run_dirs = sorted(runs_dir.iterdir())
+    assert (run_dirs[0] / "config.yaml").is_file()

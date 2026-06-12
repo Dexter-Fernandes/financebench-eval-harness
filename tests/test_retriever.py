@@ -307,7 +307,7 @@ def _run_meta_dict(tmp_path: Path, **kwargs) -> dict:
     output = tmp_path / "run" / "retrieval_results.jsonl"
     run_retrieval(QUESTIONS, make_store(), make_client(), output, top_k=1,
                   index_metadata=SAMPLE_INDEX_META, **kwargs)
-    return json.loads((tmp_path / "run" / "run_metadata.json").read_text())
+    return json.loads((tmp_path / "run" / "retrieval_run_metadata.json").read_text())
 
 
 # ---------------------------------------------------------------------------
@@ -385,7 +385,7 @@ class TestRunRetrievalMetadata:
         output = tmp_path / "run" / "retrieval_results.jsonl"
         run_retrieval(QUESTIONS, make_store(), make_client(), output,
                       top_k=1, run_id="r", index_metadata=SAMPLE_INDEX_META)
-        assert (tmp_path / "run" / "run_metadata.json").is_file()
+        assert (tmp_path / "run" / "retrieval_run_metadata.json").is_file()
 
     def test_metadata_file_is_valid_json(self, tmp_path: Path) -> None:
         d = _run_meta_dict(tmp_path, run_id="r")
@@ -411,7 +411,7 @@ class TestRunRetrievalMetadata:
         output = tmp_path / "r" / "results.jsonl"
         run_retrieval(QUESTIONS, make_store(), make_client(), output,
                       top_k=7, run_id="r", index_metadata=SAMPLE_INDEX_META)
-        d = json.loads((tmp_path / "r" / "run_metadata.json").read_text())
+        d = json.loads((tmp_path / "r" / "retrieval_run_metadata.json").read_text())
         assert d["top_k"] == 7
 
     def test_metadata_contains_chunk_size_from_index_metadata(self, tmp_path: Path) -> None:

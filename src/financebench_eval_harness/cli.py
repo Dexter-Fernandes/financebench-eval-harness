@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
+import shutil
 from dataclasses import replace
 import sys
 from pathlib import Path
@@ -19,8 +21,9 @@ from financebench_eval_harness.embedding import (
 )
 from financebench_eval_harness.index_builder import IndexBuildError, build_index, load_index
 from financebench_eval_harness.query_embedder import QueryEmbeddingError, embed_question
-from financebench_eval_harness.retrieval_config import RetrievalConfigError, load_retrieval_config
-from financebench_eval_harness.retrieval_types import DocumentPage as RetrievalDocumentPage
+from financebench_eval_harness.pipeline_config import PipelineConfigError, load_pipeline_config
+from financebench_eval_harness.retrieval_config import RetrievalConfigError, RetrievalConfig, load_retrieval_config
+from financebench_eval_harness.retrieval_types import Chunk, DocumentPage as RetrievalDocumentPage
 from financebench_eval_harness.config import (
     DEFAULT_DATASET_CONFIG_PATH,
     DatasetConfig,
@@ -185,9 +188,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory where the generated Markdown report should be written.",
     )
 
+    chunk_doc_parser = subparsers.add_parser(
+        "chunk-documents",
+        help="Chunk extracted pages into text chunks and write a chunks JSONL.",
+    )
+    chunk_doc_parser.add_argument(
+        "--config",
+        type=Path,
+        required=True,
+        help="Unified pipeline config YAML (configs/retrieval.yaml).",
+    )
+
     build_index_parser = subparsers.add_parser(
         "build-index",
         help="Chunk extracted pages and build a FAISS vector index.",
+    )
+    build_index_parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Unified pipeline config YAML; when given, reads pre-chunked data and overrides individual flags.",
     )
     build_index_parser.add_argument(
         "--retrieval-config",
@@ -204,8 +224,8 @@ def build_parser() -> argparse.ArgumentParser:
     build_index_parser.add_argument(
         "--pages",
         type=Path,
-        required=True,
-        help="JSONL file of extracted pages (from extract-documents).",
+        default=None,
+        help="JSONL file of extracted pages. Required unless --config is given.",
     )
     build_index_parser.add_argument(
         "--index-dir",
@@ -247,6 +267,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Retrieve top-k chunks for each question and write JSONL results.",
     )
     retrieve_parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Unified pipeline config YAML; when given, overrides individual flags.",
+    )
+    retrieve_parser.add_argument(
         "--index-dir",
         type=Path,
         default=Path("data/indexes/financebench"),
@@ -255,8 +281,8 @@ def build_parser() -> argparse.ArgumentParser:
     retrieve_parser.add_argument(
         "--questions",
         type=Path,
-        required=True,
-        help="JSONL file of questions (question_id + question fields).",
+        default=None,
+        help="JSONL file of questions (question_id + question fields). Required unless --config is given.",
     )
     retrieve_parser.add_argument(
         "--embedding-config",
@@ -548,7 +574,84 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Incorrect: {judge_summary['incorrect_count']}")
         return 0
 
+    if args.command == "chunk-documents":
+        try:
+            pipeline_cfg = load_pipeline_config(args.config)
+        except PipelineConfigError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        if not pipeline_cfg.pages_path.is_file():
+            print(f"Pages file not found: {pipeline_cfg.pages_path}", file=sys.stderr)
+            return 1
+
+        raw_pages = _read_jsonl_file(pipeline_cfg.pages_path)
+        pages = [
+            RetrievalDocumentPage(
+                doc_id=row["doc_name"].removesuffix(".pdf"),
+                doc_name=row["doc_name"],
+                page_num=row["page_num"],
+                text=row["text"],
+            )
+            for row in raw_pages
+        ]
+        chunks = chunk_pages(pages, pipeline_cfg.chunking)
+
+        if not chunks:
+            print("No chunks produced — pages file may be empty.", file=sys.stderr)
+            return 1
+
+        pipeline_cfg.chunks_path.parent.mkdir(parents=True, exist_ok=True)
+        with pipeline_cfg.chunks_path.open("w", encoding="utf-8") as f:
+            for chunk in chunks:
+                f.write(json.dumps(dataclasses.asdict(chunk), ensure_ascii=False) + "\n")
+
+        print(f"Chunked {len(pages)} pages into {len(chunks)} chunks.")
+        print(f"Chunks written to {pipeline_cfg.chunks_path}.")
+        return 0
+
     if args.command == "build-index":
+        if args.config is not None:
+            try:
+                pipeline_cfg = load_pipeline_config(args.config)
+            except PipelineConfigError as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
+
+            if not pipeline_cfg.chunks_path.is_file():
+                print(f"Chunks file not found: {pipeline_cfg.chunks_path}", file=sys.stderr)
+                return 1
+
+            raw_chunks = _read_jsonl_file(pipeline_cfg.chunks_path)
+            chunks = [Chunk(**row) for row in raw_chunks]
+
+            if not chunks:
+                print("No chunks found in chunks file — run chunk-documents first.", file=sys.stderr)
+                return 1
+
+            embedding_config = pipeline_cfg.embedding
+            retrieval_config = RetrievalConfig(chunking=pipeline_cfg.chunking)
+            embedding_client = _build_embedding_client(embedding_config)
+
+            try:
+                meta = _build_index_with_progress(
+                    chunks, embedding_client, retrieval_config, pipeline_cfg.index_dir,
+                    show_progress=args.progress,
+                )
+            except IndexBuildError as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
+
+            print(f"Indexed {meta.chunk_count} chunks.")
+            print(f"Embedding model: {meta.embedding_provider}/{meta.embedding_model}")
+            print(f"Corpus hash: {meta.corpus_hash}")
+            print(f"Built index at {pipeline_cfg.index_dir}.")
+            return 0
+
+        if args.pages is None:
+            print("error: --pages is required when --config is not given.", file=sys.stderr)
+            return 1
+
         try:
             retrieval_config = load_retrieval_config(args.retrieval_config)
         except (RetrievalConfigError, OSError) as exc:
@@ -625,6 +728,58 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "retrieve":
+        if args.config is not None:
+            try:
+                pipeline_cfg = load_pipeline_config(args.config)
+            except PipelineConfigError as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
+
+            try:
+                store, index_meta = load_index(pipeline_cfg.index_dir)
+            except IndexBuildError as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
+
+            if not pipeline_cfg.questions_path.is_file():
+                print(f"Questions file not found: {pipeline_cfg.questions_path}", file=sys.stderr)
+                return 1
+
+            raw = _read_jsonl_file(pipeline_cfg.questions_path)
+            questions = [
+                Question(
+                    question_id=row["question_id"],
+                    query=row.get("query") or row["question"],
+                )
+                for row in raw
+            ]
+
+            run_dir = next_run_dir(pipeline_cfg.runs_dir)
+            output_path = run_dir / "retrieval_results.jsonl"
+            embedding_client = _build_embedding_client(pipeline_cfg.embedding)
+            result = run_retrieval(
+                questions,
+                store,
+                embedding_client,
+                output_path,
+                top_k=pipeline_cfg.top_k,
+                dataset_path=str(pipeline_cfg.questions_path),
+                chunks_path=str(pipeline_cfg.chunks_path),
+                index_metadata=index_meta,
+            )
+            shutil.copy(args.config, run_dir / "config.yaml")
+
+            print(f"Retrieved top-{pipeline_cfg.top_k} chunks for {result.question_count} questions.")
+            print(f"Results written to {result.output_path}.")
+            if result.metadata_path:
+                print(f"Run metadata written to {result.metadata_path}.")
+            print(f"Config snapshot written to {run_dir / 'config.yaml'}.")
+            return 0
+
+        if args.questions is None:
+            print("error: --questions is required when --config is not given.", file=sys.stderr)
+            return 1
+
         try:
             store, index_meta = load_index(args.index_dir)
         except IndexBuildError as exc:
