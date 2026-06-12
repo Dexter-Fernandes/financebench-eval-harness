@@ -705,6 +705,94 @@ def test_run_eval_command_writes_mock_run_outputs(
     assert run_metadata["judge_summary"]["error_count"] == 0
 
 
+def test_report_baseline_command_writes_markdown_report(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    run_dir = tmp_path / "runs" / "report-run"
+    reports_dir = tmp_path / "reports" / "generated"
+    (run_dir).mkdir(parents=True)
+    (run_dir / "run_metadata.json").write_text(
+        json.dumps(
+            {
+                "mode": "closed_book",
+                "model_provider": "mock",
+                "model_name": "mock-model",
+                "attempted_count": 2,
+                "judge_summary": {
+                    "attempted_count": 2,
+                    "success_count": 2,
+                    "error_count": 0,
+                    "correct_count": 1,
+                    "correct_rate": 0.5,
+                    "partially_correct_count": 0,
+                    "partially_correct_rate": 0.0,
+                    "incorrect_count": 1,
+                    "incorrect_rate": 0.5,
+                    "not_answered_count": 0,
+                    "not_answered_rate": 0.0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_pages(
+        run_dir / "outputs.jsonl",
+        [
+            {
+                "question_id": "q1",
+                "question": "What was revenue?",
+                "gold_answer": "$123",
+                "prediction": "$123",
+                "latency_ms": 1000,
+                "input_tokens": None,
+                "output_tokens": None,
+                "judge": {
+                    "status": "success",
+                    "verdict": "correct",
+                    "reason": "Matches.",
+                    "error": None,
+                },
+            },
+            {
+                "question_id": "q2",
+                "question": "What was gross profit?",
+                "gold_answer": "$456",
+                "prediction": "$400",
+                "latency_ms": 2000,
+                "input_tokens": None,
+                "output_tokens": None,
+                "judge": {
+                    "status": "success",
+                    "verdict": "incorrect",
+                    "reason": "Wrong amount.",
+                    "error": None,
+                },
+            },
+        ],
+    )
+
+    exit_code = main(
+        [
+            "report-baseline",
+            "--run-dir",
+            str(run_dir),
+            "--output-dir",
+            str(reports_dir),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    report_path = reports_dir / "baseline_closed_book_mock-model.md"
+    assert exit_code == 0
+    assert f"Baseline report: {report_path}" in captured.out
+    assert "Questions evaluated: 2" in captured.out
+    assert "Correct: 1" in captured.out
+    assert "Incorrect: 1" in captured.out
+    assert captured.err == ""
+    assert "| Accuracy estimate | 50% |" in report_path.read_text(encoding="utf-8")
+
+
 def _write_valid_questions(path: Path) -> None:
     path.write_text(
         json.dumps(_question_row("financebench_id_1"))

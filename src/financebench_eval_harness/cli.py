@@ -39,6 +39,11 @@ from financebench_eval_harness.run_config import (
     EvaluationRunConfigError,
     load_evaluation_run_config,
 )
+from financebench_eval_harness.report import (
+    DEFAULT_REPORT_OUTPUT_DIR,
+    BaselineReportError,
+    generate_baseline_report,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -115,6 +120,23 @@ def build_parser() -> argparse.ArgumentParser:
         type=_positive_int,
         default=None,
         help="Override the configured example limit for smoke tests.",
+    )
+
+    report_parser = subparsers.add_parser(
+        "report-baseline",
+        help="Generate a Markdown baseline report for an evaluation run.",
+    )
+    report_parser.add_argument(
+        "--run-dir",
+        type=Path,
+        required=True,
+        help="Evaluation run directory containing run_metadata.json and outputs.jsonl.",
+    )
+    report_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=DEFAULT_REPORT_OUTPUT_DIR,
+        help="Directory where the generated Markdown report should be written.",
     )
 
     return parser
@@ -286,6 +308,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Judge attempted: {judge_summary['attempted_count']}")
         print(f"Judge succeeded: {judge_summary['success_count']}")
         print(f"Judge errors: {judge_summary['error_count']}")
+        return 0
+
+    if args.command == "report-baseline":
+        try:
+            result = generate_baseline_report(
+                args.run_dir,
+                output_dir=args.output_dir,
+            )
+            run_metadata = json.loads(
+                (args.run_dir / "run_metadata.json").read_text(encoding="utf-8")
+            )
+            judge_summary = run_metadata["judge_summary"]
+        except (BaselineReportError, OSError, KeyError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        print(f"Baseline report: {result.report_path}")
+        print(f"Questions evaluated: {result.evaluated_count}")
+        print(f"Correct: {judge_summary['correct_count']}")
+        print(f"Partially correct: {judge_summary['partially_correct_count']}")
+        print(f"Incorrect: {judge_summary['incorrect_count']}")
         return 0
 
     parser.error(f"Unknown command: {args.command}")
