@@ -16,6 +16,7 @@ from financebench_eval_harness.evaluation import (
 )
 from financebench_eval_harness.llm import LLMClient, LLMProviderError
 from financebench_eval_harness.run_config import EvaluationRunConfig
+from financebench_eval_harness.scoring import score_prediction, summarize_scores
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,7 @@ def run_evaluation_from_config(
     evaluation_config = load_evaluation_config()
     success_count = 0
     error_count = 0
+    scores: list[dict[str, object]] = []
     with outputs_path.open("w", encoding="utf-8") as outputs_file:
         for example in limited_examples:
             rendered_prompt = render_prompt_for_processed_example(
@@ -80,11 +82,14 @@ def run_evaluation_from_config(
                 error = str(exc)
                 error_count += 1
             latency_ms = int(round((perf_counter() - started_at) * 1000))
+            gold_answer = _string_field(example, "gold_answer")
+            score = score_prediction(gold_answer, prediction)
+            scores.append(score)
 
             output_row = {
                 "question_id": _string_field(example, "question_id"),
                 "question": question,
-                "gold_answer": _string_field(example, "gold_answer"),
+                "gold_answer": gold_answer,
                 "prediction": prediction,
                 "mode": rendered_prompt.mode.value,
                 "model_provider": config.model.provider,
@@ -97,6 +102,7 @@ def run_evaluation_from_config(
                 "output_tokens": None,
                 "status": status,
                 "error": error,
+                "scores": score,
             }
             outputs_file.write(json.dumps(output_row, ensure_ascii=False) + "\n")
             outputs_file.flush()
@@ -120,6 +126,7 @@ def run_evaluation_from_config(
         "attempted_count": attempted_count,
         "success_count": success_count,
         "error_count": error_count,
+        "score_summary": summarize_scores(scores),
     }
     run_metadata_path.write_text(
         json.dumps(run_metadata, indent=2, ensure_ascii=False) + "\n",

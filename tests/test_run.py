@@ -71,6 +71,14 @@ def test_run_evaluation_with_mock_llm_writes_config_snapshot_and_outputs(
     assert rows[0]["latency_ms"] >= 0
     assert rows[0]["input_tokens"] is None
     assert rows[0]["output_tokens"] is None
+    assert rows[0]["scores"] == {
+        "exact_match": False,
+        "normalized_string_match": False,
+        "contains_gold_answer": False,
+        "numeric_match": False,
+        "gold_numeric_values": [0.0],
+        "prediction_numeric_values": [1.0],
+    }
     assert "Question 0?" in rows[0]["prompt"]
     assert rows[0]["gold_answer"] == "Gold answer 0"
     assert llm_client.calls == [rows[0]["prompt"], rows[1]["prompt"]]
@@ -93,6 +101,17 @@ def test_run_evaluation_with_mock_llm_writes_config_snapshot_and_outputs(
     assert run_metadata["attempted_count"] == 2
     assert run_metadata["success_count"] == 2
     assert run_metadata["error_count"] == 0
+    assert run_metadata["score_summary"] == {
+        "example_count": 2,
+        "exact_match_count": 0,
+        "exact_match_rate": 0.0,
+        "normalized_string_match_count": 0,
+        "normalized_string_match_rate": 0.0,
+        "contains_gold_answer_count": 0,
+        "contains_gold_answer_rate": 0.0,
+        "numeric_match_count": 0,
+        "numeric_match_rate": 0.0,
+    }
 
 
 def test_run_evaluation_config_changes_mode_and_model_metadata(tmp_path: Path) -> None:
@@ -213,6 +232,8 @@ def test_run_evaluation_records_llm_error_and_continues(tmp_path: Path) -> None:
     assert rows[1]["latency_ms"] >= 0
     assert rows[1]["input_tokens"] is None
     assert rows[1]["output_tokens"] is None
+    assert rows[1]["scores"]["exact_match"] is False
+    assert rows[1]["scores"]["numeric_match"] is False
     assert rows[2]["question_id"] == "q2"
 
 

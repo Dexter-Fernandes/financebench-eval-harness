@@ -672,12 +672,16 @@ def test_run_eval_command_writes_mock_run_outputs(
     assert rows[0]["input_tokens"] is None
     assert rows[0]["output_tokens"] is None
     assert rows[0]["status"] == "success"
+    assert rows[0]["scores"]["contains_gold_answer"] is False
+    assert rows[0]["scores"]["numeric_match"] is False
     assert "response" not in rows[0]
     run_metadata = json.loads((run_dir / "run_metadata.json").read_text(encoding="utf-8"))
     assert run_metadata["output_filename"] == "outputs.jsonl"
     assert run_metadata["attempted_count"] == 1
     assert run_metadata["success_count"] == 1
     assert run_metadata["error_count"] == 0
+    assert run_metadata["score_summary"]["example_count"] == 1
+    assert run_metadata["score_summary"]["numeric_match_count"] == 0
 
 
 def _write_valid_questions(path: Path) -> None:
