@@ -76,6 +76,10 @@ from financebench_eval_harness.analysis import (
     join_retrieval_and_answer_scores,
     summarize_joined_metrics,
 )
+from financebench_eval_harness.rag_report import (
+    RagReportError,
+    generate_rag_report,
+)
 
 
 DEFAULT_BASELINE_RUN_CONFIG_PATH = Path("configs/baseline_closed_book.yaml")
@@ -432,6 +436,40 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         metavar="QUESTION_ID",
         help="Question ID to inspect.",
+    )
+
+    report_rag_parser = subparsers.add_parser(
+        "report-rag",
+        help="Generate end-to-end RAG evaluation Markdown report.",
+    )
+    report_rag_parser.add_argument(
+        "--joined-dir",
+        type=Path,
+        required=True,
+        help="Directory containing joined_metrics.jsonl and joined_summary.json.",
+    )
+    report_rag_parser.add_argument(
+        "--rag-run-dir",
+        type=Path,
+        default=None,
+        help="Optional RAG run directory for model metadata and rich examples.",
+    )
+    report_rag_parser.add_argument(
+        "--retrieval-summary",
+        type=Path,
+        default=None,
+        help="Optional path to retrieval_summary.json for retrieval hit rates.",
+    )
+    report_rag_parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional run identifier used in the report title and filename.",
+    )
+    report_rag_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("reports"),
+        help="Directory to write the Markdown report (default: reports/).",
     )
 
     join_metrics_parser = subparsers.add_parser(
@@ -1019,6 +1057,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Attempted: {result.attempted_count}")
         print(f"Succeeded: {result.success_count}")
         print(f"Errors: {result.error_count}")
+        return 0
+
+    if args.command == "report-rag":
+        try:
+            result = generate_rag_report(
+                args.joined_dir,
+                rag_run_dir=args.rag_run_dir,
+                retrieval_summary_path=args.retrieval_summary,
+                output_dir=args.output_dir,
+                run_id=args.run_id,
+            )
+        except (RagReportError, OSError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(f"RAG report: {result.report_path}")
+        print(f"Questions evaluated: {result.example_count}")
         return 0
 
     if args.command == "join-metrics":
