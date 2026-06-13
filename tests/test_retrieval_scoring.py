@@ -8,7 +8,9 @@ from financebench_eval_harness.retrieval_scoring import (
     evidence_text_hit,
     normalize_doc_name,
     page_hit,
+    score_hit_at_k,
     score_retrieval_result,
+    summarize_hit_at_k,
     summarize_retrieval_scores,
 )
 
@@ -270,3 +272,131 @@ def test_page_hit_works_without_matched_page_num_key() -> None:
     gold = {"evidence": [{"doc_name": "3M_2018_10K", "gold_page_num": 59, "evidence_text": "..."}]}
     result = {"retrieved": [{"rank": 1, "doc_name": "3M_2018_10K.pdf", "page_num": 59, "score": 0.9, "text": ""}]}
     assert page_hit(result, gold) is True
+
+
+# ---------------------------------------------------------------------------
+# M4.4 — hit@k: shared fixture
+# ---------------------------------------------------------------------------
+
+# Correct chunk is at rank 7; ranks 1-6 are irrelevant docs.
+_GOLD_3M_PAGE = {
+    "evidence": [
+        {
+            "doc_name": "3M_2018_10K",
+            "gold_page_num": 60,
+            "matched_page_num": 60,
+            "evidence_text": "purchases of property plant and equipment 1577",
+        }
+    ]
+}
+
+_RESULT_HIT_AT_RANK_7 = {
+    "retrieved": [
+        {"rank": i, "doc_name": "AMAZON_2019_10K.pdf", "page_num": i, "score": 0.9 - i * 0.01, "text": "unrelated"}
+        for i in range(1, 7)
+    ] + [
+        {"rank": 7, "doc_name": "3M_2018_10K.pdf", "page_num": 60, "score": 0.3,
+         "text": "Purchases of property plant and equipment 1577"}
+    ]
+}
+
+# ---------------------------------------------------------------------------
+# M4.4 — Slice 1: doc_hit with top_k
+# ---------------------------------------------------------------------------
+
+
+def test_doc_hit_top_k_false_when_correct_chunk_beyond_k() -> None:
+    assert doc_hit(_RESULT_HIT_AT_RANK_7, _GOLD_3M_PAGE, top_k=5) is False
+
+
+def test_doc_hit_top_k_true_when_correct_chunk_within_k() -> None:
+    assert doc_hit(_RESULT_HIT_AT_RANK_7, _GOLD_3M_PAGE, top_k=10) is True
+
+
+def test_doc_hit_top_k_none_uses_all_chunks() -> None:
+    assert doc_hit(_RESULT_HIT_AT_RANK_7, _GOLD_3M_PAGE, top_k=None) is True
+
+
+# ---------------------------------------------------------------------------
+# M4.4 — Slice 2: page_hit with top_k
+# ---------------------------------------------------------------------------
+
+
+def test_page_hit_top_k_false_when_correct_chunk_beyond_k() -> None:
+    assert page_hit(_RESULT_HIT_AT_RANK_7, _GOLD_3M_PAGE, top_k=5) is False
+
+
+def test_page_hit_top_k_true_when_correct_chunk_within_k() -> None:
+    assert page_hit(_RESULT_HIT_AT_RANK_7, _GOLD_3M_PAGE, top_k=10) is True
+
+
+# ---------------------------------------------------------------------------
+# M4.4 — Slice 3: evidence_text_hit with top_k
+# ---------------------------------------------------------------------------
+
+
+def test_evidence_text_hit_top_k_false_when_correct_chunk_beyond_k() -> None:
+    assert evidence_text_hit(_RESULT_HIT_AT_RANK_7, _GOLD_3M_PAGE, top_k=5) is False
+
+
+def test_evidence_text_hit_top_k_true_when_correct_chunk_within_k() -> None:
+    assert evidence_text_hit(_RESULT_HIT_AT_RANK_7, _GOLD_3M_PAGE, top_k=10) is True
+
+
+# ---------------------------------------------------------------------------
+# M4.4 — Slice 4: score_hit_at_k
+# ---------------------------------------------------------------------------
+
+
+def test_score_hit_at_k_returns_expected_keys() -> None:
+    scores = score_hit_at_k(_RESULT_HIT_AT_RANK_7, _GOLD_3M_PAGE, ks=(1, 5, 10))
+    expected_keys = {
+        "doc_hit@1", "doc_hit@5", "doc_hit@10",
+        "page_hit@1", "page_hit@5", "page_hit@10",
+        "evidence_text_hit@1", "evidence_text_hit@5", "evidence_text_hit@10",
+    }
+    assert set(scores.keys()) == expected_keys
+    assert all(isinstance(v, bool) for v in scores.values())
+
+
+def test_score_hit_at_k_correct_values_for_rank_7_hit() -> None:
+    scores = score_hit_at_k(_RESULT_HIT_AT_RANK_7, _GOLD_3M_PAGE, ks=(5, 10))
+    assert scores["page_hit@5"] is False
+    assert scores["page_hit@10"] is True
+    assert scores["doc_hit@5"] is False
+    assert scores["doc_hit@10"] is True
+
+
+def test_score_hit_at_k_default_ks_produces_four_k_values() -> None:
+    scores = score_hit_at_k(_RESULT_HIT_AT_RANK_7, _GOLD_3M_PAGE)
+    assert "doc_hit@1" in scores
+    assert "doc_hit@20" in scores
+    assert len(scores) == 3 * 4  # 3 metrics × 4 k values
+
+
+# ---------------------------------------------------------------------------
+# M4.4 — Slice 5: summarize_hit_at_k
+# ---------------------------------------------------------------------------
+
+
+def test_summarize_hit_at_k_counts_and_rates() -> None:
+    scores = [
+        {"doc_hit@1": True,  "doc_hit@5": True,  "page_hit@1": False, "page_hit@5": True,
+         "evidence_text_hit@1": False, "evidence_text_hit@5": True},
+        {"doc_hit@1": False, "doc_hit@5": True,  "page_hit@1": False, "page_hit@5": False,
+         "evidence_text_hit@1": False, "evidence_text_hit@5": False},
+    ]
+    summary = summarize_hit_at_k(scores, ks=(1, 5))
+    assert summary["example_count"] == 2
+    assert summary["doc_hit@1_count"] == 1
+    assert summary["doc_hit@1_rate"] == 0.5
+    assert summary["doc_hit@5_count"] == 2
+    assert summary["doc_hit@5_rate"] == 1.0
+    assert summary["page_hit@5_count"] == 1
+    assert summary["page_hit@5_rate"] == 0.5
+
+
+def test_summarize_hit_at_k_empty_list() -> None:
+    summary = summarize_hit_at_k([], ks=(1, 5, 10, 20))
+    assert summary["example_count"] == 0
+    assert summary["doc_hit@1_rate"] == 0.0
