@@ -3,9 +3,9 @@ evaluation:
     rag_dense:
       context_source: retrieved_chunks
       prompt:
-        id: rag_dense_v1
-        version: v1
-        template_path: prompts/rag/rag_dense_v1.txt
+        id: rag_dense_v2
+        version: v2
+        template_path: prompts/rag/rag_dense_v2.txt
     rag_oracle:
       context_source: gold_evidence
       prompt:

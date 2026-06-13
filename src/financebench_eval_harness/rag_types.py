@@ -22,6 +22,11 @@ class RAGContextChunk:
     text: str
     score: float | None = None
 
+    def format_for_prompt(self) -> str:
+        """Return a metadata header + text string suitable for passing to render_prompt()."""
+        header = f"[chunk_id: {self.chunk_id} | doc: {self.doc_name} | page: {self.page_num}]"
+        return f"{header}\n{self.text}"
+
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
             "rank": self.rank,

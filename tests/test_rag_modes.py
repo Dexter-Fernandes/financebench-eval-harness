@@ -56,7 +56,7 @@ def test_load_rag_modes_config_returns_three_modes() -> None:
 def test_load_rag_modes_config_has_correct_prompt_ids() -> None:
     config = load_evaluation_config(RAG_CONFIG_PATH, required_modes=frozenset())
 
-    assert config.prompt_for(EvaluationMode.RAG_DENSE).id == "rag_dense_v1"
+    assert config.prompt_for(EvaluationMode.RAG_DENSE).id == "rag_dense_v2"
     assert config.prompt_for(EvaluationMode.RAG_ORACLE).id == "rag_oracle_v1"
     assert config.prompt_for(EvaluationMode.RAG_NO_CONTEXT).id == "rag_no_context_v1"
 
