@@ -1,11 +1,12 @@
-"""Retrieval evaluation — M4.7.
+"""Retrieval evaluation — M4.7–M4.12.
 
 Reads a completed retrieval run, scores every question using the gold evidence
-from examples.jsonl, and writes three output files to the run directory:
+from examples.jsonl, and writes four output files to the run directory:
 
-    retrieval_scores.jsonl      — per-question scoring metrics
-    retrieval_summary.json      — aggregate metrics across all questions
+    retrieval_scores.jsonl      — per-question scoring metrics (including failure_labels)
+    retrieval_summary.json      — aggregate metrics and failure label counts
     retrieval_eval_config.yaml  — full effective config snapshot for reproducibility
+    retrieval_leaderboard.json  — compact cross-run comparison summary
 """
 
 from __future__ import annotations
@@ -68,13 +69,15 @@ def score_retrieval_run(
         row.update(score_hit_at_k(result, gold, ks=ks, overlap_threshold=config.evidence_overlap_threshold))
         row.update(score_rank_metrics(result, gold, overlap_threshold=config.evidence_overlap_threshold))
         row.update(score_evidence_overlap(result, gold, threshold=config.evidence_overlap_threshold, top_k=config.top_k))
+        row["failure_labels"] = _compute_failure_labels(row, config.top_k, config.good_rank_threshold)
         per_question.append(row)
 
     _write_jsonl(run_dir / "retrieval_scores.jsonl", per_question)
 
     hit_summary = summarize_hit_at_k(per_question, ks=ks)
     rank_summary = summarize_rank_metrics(per_question, ks=ks)
-    summary = {**hit_summary, **rank_summary}
+    label_counts = _count_failure_labels(per_question)
+    summary = {**hit_summary, **rank_summary, **label_counts}
 
     (run_dir / "retrieval_summary.json").write_text(
         json.dumps(summary, indent=2), encoding="utf-8"
@@ -153,6 +156,31 @@ def _render_retrieval_report(summary: dict, run_id: str, config: PipelineConfig)
     return "\n".join(lines)
 
 
+def _count_failure_labels(per_question: list[dict]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in per_question:
+        for label in row.get("failure_labels", []):
+            counts[label] = counts.get(label, 0) + 1
+    return counts
+
+
+def _compute_failure_labels(row: dict, k: int, good_rank_threshold: int) -> list[str]:
+    labels: list[str] = []
+    if not row.get(f"doc_hit@{k}"):
+        labels.append("wrong_document")
+        return labels
+    if not row.get(f"page_hit@{k}"):
+        labels.append("right_document_wrong_page")
+    page_rank = row.get("page_first_hit_rank")
+    if page_rank is not None and page_rank > good_rank_threshold:
+        labels.append("right_page_low_rank")
+    if row.get(f"page_hit@{k}") and not row.get(f"evidence_text_hit@{k}"):
+        labels.append("evidence_not_in_chunk")
+        if row.get("best_evidence_overlap", 1.0) < 0.1:
+            labels.append("table_extraction_issue")
+    return labels
+
+
 def _build_leaderboard_summary(
     per_question: list[dict],
     hit_summary: dict,
@@ -182,6 +210,7 @@ def _build_leaderboard_summary(
         "chunking_strategy": config.chunking.strategy,
         "chunk_size": config.chunking.chunk_size,
         "chunk_overlap": config.chunking.chunk_overlap,
+        "failure_label_counts": _count_failure_labels(per_question),
     }
 
 
@@ -296,15 +325,20 @@ def _render_rich_retrieval_report(
         lines += ["_(all questions had document hits)_", ""]
 
     # --- Common Failure Types ---
-    failures = _classify_failures(per_question, k)
-    lines += [
-        "## Common Failure Types", "",
-        "| Failure | Count | Rate |", "| --- | ---: | ---: |",
-        f"| Document not retrieved | {failures['doc_miss']} | {failures['doc_miss']/n:.1%} |" if n else "| Document not retrieved | 0 | — |",
-        f"| Document found, wrong page | {failures['page_miss']} | {failures['page_miss']/n:.1%} |" if n else "| Document found, wrong page | 0 | — |",
-        f"| Page found, evidence below threshold | {failures['text_miss']} | {failures['text_miss']/n:.1%} |" if n else "| Page found, evidence below threshold | 0 | — |",
-        "",
-    ]
+    label_counts = leaderboard.get("failure_label_counts", {})
+    _all_labels = (
+        "wrong_document",
+        "right_document_wrong_page",
+        "right_page_low_rank",
+        "evidence_not_in_chunk",
+        "table_extraction_issue",
+    )
+    lines += ["## Common Failure Types", "", "| Label | Count | Rate |", "| --- | ---: | ---: |"]
+    for label in _all_labels:
+        count = label_counts.get(label, 0)
+        rate = f"{count/n:.1%}" if n else "—"
+        lines.append(f"| {label} | {count} | {rate} |")
+    lines.append("")
 
     return "\n".join(lines)
 

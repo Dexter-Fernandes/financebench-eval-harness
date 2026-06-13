@@ -197,6 +197,17 @@ class TestLoadPipelineConfig:
         with pytest.raises(PipelineConfigError, match="retrieval"):
             load_pipeline_config(p)
 
+    def test_good_rank_threshold_defaults_to_3_when_omitted(self, tmp_path: Path) -> None:
+        p = _write_config(tmp_path, _VALID_YAML)
+        cfg = load_pipeline_config(p)
+        assert cfg.good_rank_threshold == 3
+
+    def test_good_rank_threshold_round_trips_when_set(self, tmp_path: Path) -> None:
+        yaml_with_threshold = _VALID_YAML + "  good_rank_threshold: 2\n"
+        p = _write_config(tmp_path, yaml_with_threshold)
+        cfg = load_pipeline_config(p)
+        assert cfg.good_rank_threshold == 2
+
     def test_raises_when_required_path_missing(self, tmp_path: Path) -> None:
         yaml_missing_chunks = textwrap.dedent("""\
             retrieval:

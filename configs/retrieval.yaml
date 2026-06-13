@@ -6,6 +6,7 @@ retrieval:
   runs_dir: runs
   top_k: 5
   evidence_overlap_threshold: 0.5
+  good_rank_threshold: 3
   chunking:
     strategy: recursive_text
     chunk_size: 800

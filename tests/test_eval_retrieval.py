@@ -426,6 +426,188 @@ def _read_scores(run_dir: Path) -> list[dict]:
     return [json.loads(l) for l in (run_dir / "retrieval_scores.jsonl").read_text().splitlines() if l.strip()]
 
 
+# ---------------------------------------------------------------------------
+# M4.12 — failure labels
+# ---------------------------------------------------------------------------
+
+
+def _make_wrong_doc_result(question_id: str) -> dict:
+    """Retrieved result where the doc does NOT match gold."""
+    return {
+        "question_id": question_id,
+        "query": "What were capex?",
+        "retrieved": [
+            {"rank": 1, "chunk_id": "c1", "doc_name": "WRONG_DOC.pdf", "page_num": 1,
+             "score": 0.9, "text": "unrelated text"},
+        ],
+    }
+
+
+def _make_right_doc_wrong_page_result(question_id: str, doc_name: str) -> dict:
+    """Retrieved result with correct doc but wrong page (page 99 vs gold page 59)."""
+    return {
+        "question_id": question_id,
+        "query": "What were capex?",
+        "retrieved": [
+            {"rank": 1, "chunk_id": "c1", "doc_name": doc_name, "page_num": 99,
+             "score": 0.9, "text": "some text"},
+        ],
+    }
+
+
+def _make_right_page_high_rank_result(question_id: str, doc_name: str, page_num: int) -> dict:
+    """Correct page retrieved but at rank 4 (above default good_rank_threshold=3)."""
+    return {
+        "question_id": question_id,
+        "query": "What were capex?",
+        "retrieved": [
+            {"rank": 1, "chunk_id": "c1", "doc_name": doc_name, "page_num": 99, "score": 0.9, "text": "other"},
+            {"rank": 2, "chunk_id": "c2", "doc_name": doc_name, "page_num": 98, "score": 0.8, "text": "other"},
+            {"rank": 3, "chunk_id": "c3", "doc_name": doc_name, "page_num": 97, "score": 0.7, "text": "other"},
+            {"rank": 4, "chunk_id": "c4", "doc_name": doc_name, "page_num": page_num, "score": 0.6, "text": "other"},
+            {"rank": 5, "chunk_id": "c5", "doc_name": doc_name, "page_num": 96, "score": 0.5, "text": "other"},
+        ],
+    }
+
+
+def _make_right_page_low_overlap_result(question_id: str, doc_name: str, page_num: int, overlap: float) -> dict:
+    """Correct doc+page retrieved at rank 1, but with text that gives specified overlap with evidence."""
+    if overlap < 0.05:
+        chunk_text = "completely different content with no matching tokens whatsoever xyz"
+    else:
+        chunk_text = "some text partial"
+    return {
+        "question_id": question_id,
+        "query": "What were capex?",
+        "retrieved": [
+            {"rank": 1, "chunk_id": "c1", "doc_name": doc_name, "page_num": page_num,
+             "score": 0.9, "text": chunk_text},
+        ],
+    }
+
+
+def _run_with_scenario(
+    tmp_path: Path,
+    retrieval_result: dict,
+    gold_example: dict,
+    *,
+    top_k: int = 5,
+    good_rank_threshold: int = 3,
+    threshold: float = 0.5,
+) -> list[dict]:
+    """Run score_retrieval_run with given scenario, return per-question score rows."""
+    cfg = PipelineConfig(
+        pages_path=tmp_path / "pages.jsonl",
+        chunks_path=tmp_path / "chunks.jsonl",
+        index_dir=tmp_path / "idx",
+        questions_path=tmp_path / "examples.jsonl",
+        runs_dir=tmp_path / "runs",
+        top_k=top_k,
+        evidence_overlap_threshold=threshold,
+        chunking=_CHUNKING,
+        embedding=_EMBEDDING,
+        good_rank_threshold=good_rank_threshold,
+    )
+    run_dir = tmp_path / "run_001"
+    run_dir.mkdir(exist_ok=True)
+    _write_jsonl(run_dir / "retrieval_results.jsonl", [retrieval_result])
+    _write_jsonl(cfg.questions_path, [gold_example])
+    score_retrieval_run(cfg, run_dir)
+    return _read_scores(run_dir)
+
+
+def test_score_retrieval_run_row_contains_failure_labels(tmp_path: Path) -> None:
+    run_dir = _run_with_one_example(tmp_path)
+    rows = _read_scores(run_dir)
+    assert "failure_labels" in rows[0]
+    assert isinstance(rows[0]["failure_labels"], list)
+
+
+def test_wrong_document_label_when_doc_not_retrieved(tmp_path: Path) -> None:
+    result = _make_wrong_doc_result("q1")
+    gold = _make_gold_example("q1", "3M_2018_10K", 59, 60, "some text")
+    rows = _run_with_scenario(tmp_path, result, gold)
+    assert "wrong_document" in rows[0]["failure_labels"]
+
+
+def test_wrong_document_label_is_only_label_when_doc_missed(tmp_path: Path) -> None:
+    result = _make_wrong_doc_result("q1")
+    gold = _make_gold_example("q1", "3M_2018_10K", 59, 60, "some text")
+    rows = _run_with_scenario(tmp_path, result, gold)
+    assert rows[0]["failure_labels"] == ["wrong_document"]
+
+
+def test_right_document_wrong_page_label(tmp_path: Path) -> None:
+    result = _make_right_doc_wrong_page_result("q1", "3M_2018_10K.pdf")
+    gold = _make_gold_example("q1", "3M_2018_10K", 59, 60, "some text")
+    rows = _run_with_scenario(tmp_path, result, gold)
+    assert "right_document_wrong_page" in rows[0]["failure_labels"]
+    assert "wrong_document" not in rows[0]["failure_labels"]
+
+
+def test_right_page_low_rank_label_when_page_found_above_threshold(tmp_path: Path) -> None:
+    result = _make_right_page_high_rank_result("q1", "3M_2018_10K.pdf", 60)
+    gold = _make_gold_example("q1", "3M_2018_10K", 59, 60, "other")
+    rows = _run_with_scenario(tmp_path, result, gold, good_rank_threshold=3)
+    assert "right_page_low_rank" in rows[0]["failure_labels"]
+
+
+def test_right_page_low_rank_label_absent_when_within_threshold(tmp_path: Path) -> None:
+    result = _make_right_page_high_rank_result("q1", "3M_2018_10K.pdf", 60)
+    gold = _make_gold_example("q1", "3M_2018_10K", 59, 60, "other")
+    rows = _run_with_scenario(tmp_path, result, gold, good_rank_threshold=5)
+    assert "right_page_low_rank" not in rows[0]["failure_labels"]
+
+
+def test_evidence_not_in_chunk_label_when_page_found_but_overlap_below_threshold(tmp_path: Path) -> None:
+    result = _make_right_page_low_overlap_result("q1", "3M_2018_10K.pdf", 60, overlap=0.3)
+    gold = _make_gold_example("q1", "3M_2018_10K", 59, 60,
+                               "purchases of property plant and equipment 1577")
+    rows = _run_with_scenario(tmp_path, result, gold, threshold=0.5)
+    assert "evidence_not_in_chunk" in rows[0]["failure_labels"]
+
+
+def test_table_extraction_issue_label_when_overlap_very_low(tmp_path: Path) -> None:
+    result = _make_right_page_low_overlap_result("q1", "3M_2018_10K.pdf", 60, overlap=0.0)
+    gold = _make_gold_example("q1", "3M_2018_10K", 59, 60,
+                               "purchases of property plant and equipment 1577")
+    rows = _run_with_scenario(tmp_path, result, gold, threshold=0.5)
+    assert "table_extraction_issue" in rows[0]["failure_labels"]
+    assert "evidence_not_in_chunk" in rows[0]["failure_labels"]
+
+
+def test_no_failure_labels_when_all_criteria_met(tmp_path: Path) -> None:
+    result = _make_retrieval_result("q1", "3M_2018_10K.pdf", 60,
+                                    "purchases of property plant and equipment 1577")
+    gold = _make_gold_example("q1", "3M_2018_10K", 59, 60,
+                               "purchases of property plant and equipment 1577")
+    rows = _run_with_scenario(tmp_path, result, gold, threshold=0.5)
+    assert rows[0]["failure_labels"] == []
+
+
+def test_summary_contains_failure_label_counts(tmp_path: Path) -> None:
+    result = _make_wrong_doc_result("q1")
+    gold = _make_gold_example("q1", "3M_2018_10K", 59, 60, "some text")
+    cfg = PipelineConfig(
+        pages_path=tmp_path / "pages.jsonl",
+        chunks_path=tmp_path / "chunks.jsonl",
+        index_dir=tmp_path / "idx",
+        questions_path=tmp_path / "examples.jsonl",
+        runs_dir=tmp_path / "runs",
+        top_k=5,
+        evidence_overlap_threshold=0.5,
+        chunking=_CHUNKING,
+        embedding=_EMBEDDING,
+    )
+    run_dir = tmp_path / "run_001"
+    run_dir.mkdir()
+    _write_jsonl(run_dir / "retrieval_results.jsonl", [result])
+    _write_jsonl(cfg.questions_path, [gold])
+    summary = score_retrieval_run(cfg, run_dir)
+    assert "wrong_document" in summary
+    assert summary["wrong_document"] == 1
+
+
 def test_score_retrieval_run_row_contains_k(tmp_path: Path) -> None:
     run_dir = _run_with_one_example(tmp_path, top_k=7)
     rows = _read_scores(run_dir)
@@ -480,6 +662,13 @@ def test_leaderboard_mean_best_evidence_overlap_is_present(tmp_path: Path) -> No
     d = _read_leaderboard(run_dir)
     assert "mean_best_evidence_overlap" in d
     assert isinstance(d["mean_best_evidence_overlap"], float)
+
+
+def test_leaderboard_contains_failure_label_counts(tmp_path: Path) -> None:
+    run_dir = _run_with_one_example(tmp_path)
+    d = _read_leaderboard(run_dir)
+    assert "failure_label_counts" in d
+    assert isinstance(d["failure_label_counts"], dict)
 
 
 def test_leaderboard_contains_config_metadata(tmp_path: Path) -> None:
@@ -548,4 +737,15 @@ def test_rich_report_has_worst_examples_section(tmp_path: Path) -> None:
 def test_rich_report_has_common_failure_types_section(tmp_path: Path) -> None:
     content = _rich_report_content(tmp_path)
     assert "## Common Failure Types" in content
-    assert "Document not retrieved" in content
+
+
+def test_rich_report_failure_types_uses_label_names(tmp_path: Path) -> None:
+    content = _rich_report_content(tmp_path)
+    assert "wrong_document" in content
+
+
+def test_rich_report_failure_types_shows_all_known_labels(tmp_path: Path) -> None:
+    content = _rich_report_content(tmp_path)
+    for label in ("wrong_document", "right_document_wrong_page", "right_page_low_rank",
+                  "evidence_not_in_chunk", "table_extraction_issue"):
+        assert label in content

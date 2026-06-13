@@ -26,11 +26,13 @@ class PipelineConfig:
     evidence_overlap_threshold: float
     chunking: ChunkingConfig
     embedding: EmbeddingConfig
+    good_rank_threshold: int = 3
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "top_k": self.top_k,
             "evidence_overlap_threshold": self.evidence_overlap_threshold,
+            "good_rank_threshold": self.good_rank_threshold,
             "questions_path": str(self.questions_path),
             "chunks_path": str(self.chunks_path),
             "index_dir": str(self.index_dir),
@@ -109,4 +111,5 @@ def load_pipeline_config(path: Path) -> PipelineConfig:
         evidence_overlap_threshold=float(r["evidence_overlap_threshold"]),
         chunking=chunking,
         embedding=embedding,
+        good_rank_threshold=int(r.get("good_rank_threshold", 3)),
     )
