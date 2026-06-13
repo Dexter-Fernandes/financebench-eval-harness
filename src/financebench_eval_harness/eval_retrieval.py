@@ -11,6 +11,7 @@ from examples.jsonl, and writes three output files to the run directory:
 from __future__ import annotations
 
 import json
+import statistics
 from pathlib import Path
 
 import yaml
@@ -81,6 +82,11 @@ def score_retrieval_run(
 
     _save_config_snapshot(config, run_dir / "retrieval_eval_config.yaml")
 
+    leaderboard = _build_leaderboard_summary(per_question, hit_summary, rank_summary, config, run_dir.name)
+    (run_dir / "retrieval_leaderboard.json").write_text(
+        json.dumps(leaderboard, indent=2), encoding="utf-8"
+    )
+
     return summary
 
 
@@ -134,6 +140,38 @@ def _render_retrieval_report(summary: dict, run_id: str, config: PipelineConfig)
             lines.append(f"| {key} | {value} |")
     lines.append("")
     return "\n".join(lines)
+
+
+def _build_leaderboard_summary(
+    per_question: list[dict],
+    hit_summary: dict,
+    rank_summary: dict,
+    config: PipelineConfig,
+    run_id: str,
+) -> dict:
+    k = config.top_k
+    n = len(per_question)
+    mean_overlap = (
+        statistics.mean(r["best_evidence_overlap"] for r in per_question) if per_question else 0.0
+    )
+    return {
+        "run_id": run_id,
+        "num_questions": n,
+        "k": k,
+        "doc_hit@k": hit_summary.get(f"doc_hit@{k}_rate", 0.0),
+        "page_hit@k": hit_summary.get(f"page_hit@{k}_rate", 0.0),
+        "evidence_text_hit@k": hit_summary.get(f"evidence_text_hit@{k}_rate", 0.0),
+        "mrr@k": rank_summary.get(f"doc_mrr@{k}", 0.0),
+        "mean_best_evidence_overlap": mean_overlap,
+        "median_first_doc_hit_rank": rank_summary.get("doc_median_first_hit_rank"),
+        "median_first_page_hit_rank": rank_summary.get("page_median_first_hit_rank"),
+        "evidence_overlap_threshold": config.evidence_overlap_threshold,
+        "embedding_provider": config.embedding.provider,
+        "embedding_model_name": config.embedding.model_name,
+        "chunking_strategy": config.chunking.strategy,
+        "chunk_size": config.chunking.chunk_size,
+        "chunk_overlap": config.chunking.chunk_overlap,
+    }
 
 
 def _load_retrieval_results(path: Path) -> dict[str, dict]:

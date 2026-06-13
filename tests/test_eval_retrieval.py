@@ -442,3 +442,52 @@ def test_score_retrieval_run_row_contains_gold_page_num(tmp_path: Path) -> None:
     run_dir = _run_with_one_example(tmp_path)
     rows = _read_scores(run_dir)
     assert rows[0]["gold_page_num"] == 59
+
+
+# ---------------------------------------------------------------------------
+# M4.10 — compact leaderboard summary
+# ---------------------------------------------------------------------------
+
+
+def _read_leaderboard(run_dir: Path) -> dict:
+    return json.loads((run_dir / "retrieval_leaderboard.json").read_text())
+
+
+def test_score_retrieval_run_writes_leaderboard_json(tmp_path: Path) -> None:
+    run_dir = _run_with_one_example(tmp_path)
+    assert (run_dir / "retrieval_leaderboard.json").exists()
+
+
+def test_leaderboard_contains_run_id(tmp_path: Path) -> None:
+    run_dir = _run_with_one_example(tmp_path)
+    assert _read_leaderboard(run_dir)["run_id"] == "run_001"
+
+
+def test_leaderboard_k_equals_config_top_k(tmp_path: Path) -> None:
+    run_dir = _run_with_one_example(tmp_path, top_k=7)
+    assert _read_leaderboard(run_dir)["k"] == 7
+
+
+def test_leaderboard_doc_hit_at_k_is_rate_at_configured_k(tmp_path: Path) -> None:
+    run_dir = _run_with_one_example(tmp_path, top_k=5)
+    d = _read_leaderboard(run_dir)
+    assert "doc_hit@k" in d
+    assert isinstance(d["doc_hit@k"], float)
+
+
+def test_leaderboard_mean_best_evidence_overlap_is_present(tmp_path: Path) -> None:
+    run_dir = _run_with_one_example(tmp_path)
+    d = _read_leaderboard(run_dir)
+    assert "mean_best_evidence_overlap" in d
+    assert isinstance(d["mean_best_evidence_overlap"], float)
+
+
+def test_leaderboard_contains_config_metadata(tmp_path: Path) -> None:
+    run_dir = _run_with_one_example(tmp_path)
+    d = _read_leaderboard(run_dir)
+    assert d["embedding_provider"] == "mock"
+    assert d["embedding_model_name"] == "mock-embed"
+    assert d["chunking_strategy"] == "recursive_text"
+    assert d["chunk_size"] == 800
+    assert d["chunk_overlap"] == 150
+    assert d["evidence_overlap_threshold"] == pytest.approx(0.5)
