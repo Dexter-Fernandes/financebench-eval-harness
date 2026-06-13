@@ -72,6 +72,10 @@ from financebench_eval_harness.rag_run_config import (
     RAGRunConfigError,
     load_rag_run_config,
 )
+from financebench_eval_harness.analysis import (
+    join_retrieval_and_answer_scores,
+    summarize_joined_metrics,
+)
 
 
 DEFAULT_BASELINE_RUN_CONFIG_PATH = Path("configs/baseline_closed_book.yaml")
@@ -428,6 +432,35 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         metavar="QUESTION_ID",
         help="Question ID to inspect.",
+    )
+
+    join_metrics_parser = subparsers.add_parser(
+        "join-metrics",
+        help="Join retrieval scores with answer scores per question.",
+    )
+    join_metrics_parser.add_argument(
+        "--retrieval-scores",
+        type=Path,
+        required=True,
+        help="Path to retrieval_scores.jsonl produced by eval-retrieval.",
+    )
+    join_metrics_parser.add_argument(
+        "--answer-scores",
+        type=Path,
+        required=True,
+        help="Path to scores.jsonl produced by run-rag.",
+    )
+    join_metrics_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        required=True,
+        help="Directory to write joined_metrics.jsonl and joined_summary.json.",
+    )
+    join_metrics_parser.add_argument(
+        "--k",
+        type=int,
+        default=5,
+        help="k value for hit@k retrieval signal (default: 5).",
     )
 
     return parser
@@ -986,6 +1019,41 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Attempted: {result.attempted_count}")
         print(f"Succeeded: {result.success_count}")
         print(f"Errors: {result.error_count}")
+        return 0
+
+    if args.command == "join-metrics":
+        if not args.retrieval_scores.is_file():
+            print(f"Retrieval scores file not found: {args.retrieval_scores}", file=sys.stderr)
+            return 1
+        if not args.answer_scores.is_file():
+            print(f"Answer scores file not found: {args.answer_scores}", file=sys.stderr)
+            return 1
+
+        retrieval_scores = _read_jsonl_file(args.retrieval_scores)
+        answer_scores = _read_jsonl_file(args.answer_scores)
+        rows = join_retrieval_and_answer_scores(retrieval_scores, answer_scores, k=args.k)
+        summary = summarize_joined_metrics(rows)
+
+        output_dir = args.output_dir
+        output_dir.mkdir(parents=True, exist_ok=True)
+        joined_path = output_dir / "joined_metrics.jsonl"
+        summary_path = output_dir / "joined_summary.json"
+
+        with joined_path.open("w", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        summary_path.write_text(
+            json.dumps(summary, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
+        print(f"Joined {summary['example_count']} questions.")
+        print(f"  retrieval_hit_answer_correct:  {summary['retrieval_hit_answer_correct']}")
+        print(f"  retrieval_hit_answer_wrong:    {summary['retrieval_hit_answer_wrong']}")
+        print(f"  retrieval_miss_answer_correct: {summary['retrieval_miss_answer_correct']}")
+        print(f"  retrieval_miss_answer_wrong:   {summary['retrieval_miss_answer_wrong']}")
+        print(f"Wrote joined metrics to {joined_path}")
+        print(f"Wrote summary to {summary_path}")
         return 0
 
     parser.error(f"Unknown command: {args.command}")
