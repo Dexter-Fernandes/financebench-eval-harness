@@ -99,6 +99,29 @@ class TestPipelineConfig:
         with pytest.raises(Exception):
             cfg.top_k = 10  # type: ignore[misc]
 
+    def test_to_dict_contains_top_level_keys(self) -> None:
+        cfg = self._make()
+        d = cfg.to_dict()
+        assert set(d.keys()) >= {"top_k", "evidence_overlap_threshold", "questions_path", "chunking", "embedding"}
+
+    def test_to_dict_chunking_fields(self) -> None:
+        cfg = self._make()
+        d = cfg.to_dict()
+        assert d["chunking"]["chunk_size"] == 800
+        assert d["chunking"]["chunk_overlap"] == 150
+
+    def test_to_dict_embedding_fields(self) -> None:
+        cfg = self._make()
+        d = cfg.to_dict()
+        assert d["embedding"]["provider"] == "mock"
+        assert d["embedding"]["model_name"] == "mock-embed"
+
+    def test_to_dict_paths_are_strings(self) -> None:
+        cfg = self._make()
+        d = cfg.to_dict()
+        assert isinstance(d["questions_path"], str)
+        assert isinstance(d["chunks_path"], str)
+
 
 # ---------------------------------------------------------------------------
 # load_pipeline_config

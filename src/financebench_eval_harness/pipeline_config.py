@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -25,6 +26,29 @@ class PipelineConfig:
     evidence_overlap_threshold: float
     chunking: ChunkingConfig
     embedding: EmbeddingConfig
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "top_k": self.top_k,
+            "evidence_overlap_threshold": self.evidence_overlap_threshold,
+            "questions_path": str(self.questions_path),
+            "chunks_path": str(self.chunks_path),
+            "index_dir": str(self.index_dir),
+            "runs_dir": str(self.runs_dir),
+            "chunking": {
+                "strategy": self.chunking.strategy,
+                "chunk_size": self.chunking.chunk_size,
+                "chunk_overlap": self.chunking.chunk_overlap,
+                "min_chunk_chars": self.chunking.min_chunk_chars,
+            },
+            "embedding": {
+                "provider": self.embedding.provider,
+                "model_name": self.embedding.model_name,
+                "base_url": self.embedding.base_url,
+                "timeout_seconds": self.embedding.timeout_seconds,
+                "batch_size": self.embedding.batch_size,
+            },
+        }
 
 
 class PipelineConfigError(ValueError):
