@@ -137,10 +137,42 @@ def _chunk_from_dict(d: dict[str, Any]) -> RAGContextChunk:
     )
 
 
+_TRUNCATION_MARKER = "… [truncated]"
+
+
+def format_retrieved_context(
+    chunks: Sequence[RAGContextChunk],
+    *,
+    max_context_chars: int | None = None,
+) -> str:
+    """Format a ranked list of chunks into a single context block for prompt injection."""
+    if not chunks:
+        return ""
+
+    full = "\n\n".join(_format_chunk_block(c) for c in chunks)
+
+    if max_context_chars is None or len(full) <= max_context_chars:
+        return full
+
+    budget = max_context_chars - len(_TRUNCATION_MARKER)
+    return full[:budget] + _TRUNCATION_MARKER
+
+
+def _format_chunk_block(chunk: RAGContextChunk) -> str:
+    return (
+        f"[{chunk.rank}] chunk_id={chunk.chunk_id}\n"
+        f"Document: {chunk.doc_name}\n"
+        f"Page: {chunk.page_num}\n"
+        f"Text:\n"
+        f"{chunk.text}"
+    )
+
+
 __all__ = [
     "RAGContextChunk",
     "RAGInput",
     "RAGInputError",
     "build_rag_inputs",
+    "format_retrieved_context",
     "load_rag_inputs",
 ]
