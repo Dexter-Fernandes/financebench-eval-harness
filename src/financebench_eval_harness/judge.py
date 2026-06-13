@@ -28,6 +28,7 @@ def render_judge_prompt_for_processed_example(
     processed_example: dict[str, object],
     *,
     prediction: str,
+    retrieved_context: str | None = None,
 ) -> RenderedJudgePrompt:
     template = _read_prompt_template(prompt_config.template_path)
     question = _required_text(processed_example.get("question"), "question")
@@ -40,6 +41,7 @@ def render_judge_prompt_for_processed_example(
             gold_answer=gold_answer,
             prediction=clean_prediction,
             evidence_text=evidence_text,
+            retrieved_context=retrieved_context or "(no retrieved context)",
         ),
         prompt_id=prompt_config.id,
         prompt_version=prompt_config.version,
@@ -47,7 +49,7 @@ def render_judge_prompt_for_processed_example(
     )
 
 
-def parse_judge_response(raw_response: str) -> dict[str, str]:
+def parse_judge_response(raw_response: str) -> dict[str, object]:
     try:
         decoded_response = json.loads(raw_response)
     except JSONDecodeError as exc:
@@ -61,7 +63,15 @@ def parse_judge_response(raw_response: str) -> dict[str, str]:
     if verdict not in JUDGE_VERDICTS:
         raise JudgeError(f"Unsupported judge verdict: {verdict}")
 
-    return {"verdict": verdict, "reason": reason}
+    numeric_error = _optional_bool_field(decoded_response, "numeric_error")
+    unsupported_claims = _optional_bool_field(decoded_response, "unsupported_claims")
+
+    return {
+        "verdict": verdict,
+        "reason": reason,
+        "numeric_error": numeric_error,
+        "unsupported_claims": unsupported_claims,
+    }
 
 
 def summarize_judges(judge_rows: list[dict[str, object]]) -> dict[str, object]:
@@ -118,6 +128,19 @@ def _joined_evidence_context(evidence: object) -> str:
         f"[Evidence {index}]\n{text}"
         for index, text in enumerate(evidence_texts, start=1)
     )
+
+
+def _optional_bool_field(
+    decoded_response: dict[str, Any], field_name: str
+) -> bool | None:
+    if field_name not in decoded_response:
+        return None
+    value = decoded_response[field_name]
+    if not isinstance(value, bool):
+        raise JudgeError(
+            f"Judge response field '{field_name}' must be a boolean, got: {type(value).__name__}"
+        )
+    return value
 
 
 def _string_field(decoded_response: dict[str, Any], field_name: str) -> str:

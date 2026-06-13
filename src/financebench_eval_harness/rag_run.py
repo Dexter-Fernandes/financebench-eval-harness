@@ -137,6 +137,7 @@ def run_rag_from_config(
                     judge_client=judge_client,
                     example=example_dict,
                     prediction=prediction,
+                    retrieved_context=context_for_prompt,
                 )
                 judge_rows.append(judge_row)
                 if judge_row["status"] == "error":
@@ -245,11 +246,14 @@ def _score_with_judge(
     judge_client: LLMClient,
     example: dict[str, Any],
     prediction: str,
+    retrieved_context: str | None = None,
 ) -> dict[str, object]:
     assert config.judge is not None
     raw_response: str | None = None
     verdict: str | None = None
     reason: str | None = None
+    numeric_error: bool | None = None
+    unsupported_claims: bool | None = None
     status = "success"
     error: str | None = None
     started_at = perf_counter()
@@ -258,11 +262,14 @@ def _score_with_judge(
             config.judge.prompt,
             example,
             prediction=prediction,
+            retrieved_context=retrieved_context,
         )
         raw_response = judge_client.generate(rendered.text).text
         parsed = parse_judge_response(raw_response)
-        verdict = parsed["verdict"]
-        reason = parsed["reason"]
+        verdict = str(parsed["verdict"])
+        reason = str(parsed["reason"])
+        numeric_error = parsed.get("numeric_error")  # type: ignore[assignment]
+        unsupported_claims = parsed.get("unsupported_claims")  # type: ignore[assignment]
     except (JudgeError, LLMProviderError) as exc:
         status = "error"
         error = str(exc)
@@ -272,6 +279,8 @@ def _score_with_judge(
         "status": status,
         "verdict": verdict,
         "reason": reason,
+        "numeric_error": numeric_error,
+        "unsupported_claims": unsupported_claims,
         "error": error,
         "raw_response": raw_response,
         "model_provider": config.judge.model.provider,
