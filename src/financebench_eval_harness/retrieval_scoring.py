@@ -1,8 +1,19 @@
-"""Retrieval evaluation scoring — M4.1.
+"""Retrieval evaluation scoring — M4.1/M4.3.
 
 Computes four deterministic retrieval quality metrics directly from
 retrieval_results.jsonl paired with gold evidence from examples.jsonl.
 No LLM calls required.
+
+Page number conventions
+-----------------------
+gold_page_num   — FinanceBench dataset annotation; may differ from PDF index by ±1.
+matched_page_num — 1-based PDF page index where evidence text was actually found
+                   (set by the page matcher in processed_examples.py).
+chunk page_num  — 1-based PDF page index assigned by the document extractor;
+                  same convention as matched_page_num.
+
+page_hit compares chunk page_num against the union {gold_page_num, matched_page_num}
+to avoid false negatives from the known ±1 annotation offset present in FinanceBench.
 """
 
 from __future__ import annotations
@@ -10,6 +21,7 @@ from __future__ import annotations
 from financebench_eval_harness.scoring import _normalize_text
 
 __all__ = [
+    "normalize_doc_name",
     "doc_hit",
     "page_hit",
     "evidence_text_hit",
@@ -22,12 +34,23 @@ _SCORE_KEYS = ("doc_hit", "page_hit", "evidence_text_hit", "answerable_hit")
 
 
 # ---------------------------------------------------------------------------
-# Private helpers
+# Public normalization helper
 # ---------------------------------------------------------------------------
 
 
-def _strip_pdf(name: str) -> str:
-    return name.removesuffix(".pdf").removesuffix(".PDF").lower()
+def normalize_doc_name(name: str) -> str:
+    """Normalize a document name for comparison.
+
+    Strips .pdf/.PDF suffix, lowercases, and strips surrounding whitespace.
+    Handles the difference between retrieval results (always .pdf-suffixed)
+    and gold evidence (no suffix).
+    """
+    return name.strip().removesuffix(".pdf").removesuffix(".PDF").lower()
+
+
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
 
 
 def _word_tokens(text: str) -> set[str]:
@@ -40,6 +63,18 @@ def _jaccard(a: set[str], b: set[str]) -> float:
     return len(a & b) / len(a | b)
 
 
+def _page_candidates(ev: dict) -> set[int]:
+    """Return the set of page numbers to accept as a hit for this evidence item.
+
+    Includes both gold_page_num and matched_page_num (when present) so that
+    chunks whose page_num aligns with either the FinanceBench annotation or
+    the PDF-extraction index are counted as hits.
+    """
+    gold = ev["gold_page_num"]
+    matched = ev.get("matched_page_num", gold)
+    return {gold, matched}
+
+
 # ---------------------------------------------------------------------------
 # Public scoring functions
 # ---------------------------------------------------------------------------
@@ -48,11 +83,11 @@ def _jaccard(a: set[str], b: set[str]) -> float:
 def doc_hit(retrieval_result: dict, gold_example: dict) -> bool:
     """Return True if any retrieved chunk's doc_name matches any gold evidence doc_name.
 
-    Comparison strips .pdf suffix and is case-insensitive.
+    Comparison is case-insensitive and strips the .pdf suffix.
     """
-    gold_docs = {_strip_pdf(ev["doc_name"]) for ev in gold_example.get("evidence", [])}
+    gold_docs = {normalize_doc_name(ev["doc_name"]) for ev in gold_example.get("evidence", [])}
     return any(
-        _strip_pdf(chunk["doc_name"]) in gold_docs
+        normalize_doc_name(chunk["doc_name"]) in gold_docs
         for chunk in retrieval_result.get("retrieved", [])
     )
 
@@ -60,14 +95,16 @@ def doc_hit(retrieval_result: dict, gold_example: dict) -> bool:
 def page_hit(retrieval_result: dict, gold_example: dict) -> bool:
     """Return True if any retrieved chunk matches any gold evidence on both doc and page.
 
-    Uses gold_page_num (the dataset ground-truth page, not matched_page_num).
+    Accepts chunk page_num matching either gold_page_num or matched_page_num from
+    the gold evidence — see module docstring for page number conventions.
     """
-    gold_pages = {
-        (_strip_pdf(ev["doc_name"]), ev["gold_page_num"])
-        for ev in gold_example.get("evidence", [])
-    }
+    gold_pages: set[tuple[str, int]] = set()
+    for ev in gold_example.get("evidence", []):
+        doc = normalize_doc_name(ev["doc_name"])
+        for page in _page_candidates(ev):
+            gold_pages.add((doc, page))
     return any(
-        (_strip_pdf(chunk["doc_name"]), chunk["page_num"]) in gold_pages
+        (normalize_doc_name(chunk["doc_name"]), chunk["page_num"]) in gold_pages
         for chunk in retrieval_result.get("retrieved", [])
     )
 

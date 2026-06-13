@@ -161,3 +161,42 @@ def test_build_gold_lookup_raises_on_duplicate_question_id(tmp_path: Path) -> No
     _write_jsonl(f, [record, record])
     with pytest.raises(GoldLookupError, match="q_dup"):
         build_gold_lookup(f)
+
+
+# ---------------------------------------------------------------------------
+# M4.3 — matched_page_num and page_num_mismatch fields
+# ---------------------------------------------------------------------------
+
+
+def test_build_gold_lookup_includes_matched_page_num(tmp_path: Path) -> None:
+    f = tmp_path / "examples.jsonl"
+    _write_jsonl(f, [_make_record("q1", gold_page_num=59)])
+    result = build_gold_lookup(f)
+    # _make_record sets matched_page_num == gold_page_num by default
+    assert result["q1"]["matched_page_num"] == 59
+
+
+def test_build_gold_lookup_page_num_mismatch_false_when_equal(tmp_path: Path) -> None:
+    f = tmp_path / "examples.jsonl"
+    _write_jsonl(f, [_make_record("q1", gold_page_num=59)])
+    result = build_gold_lookup(f)
+    assert result["q1"]["page_num_mismatch"] is False
+
+
+def test_build_gold_lookup_page_num_mismatch_true_when_different(tmp_path: Path) -> None:
+    f = tmp_path / "examples.jsonl"
+    record = _make_record("q1", gold_page_num=59)
+    record["evidence"][0]["matched_page_num"] = 60  # the common +1 offset
+    _write_jsonl(f, [record])
+    result = build_gold_lookup(f)
+    assert result["q1"]["matched_page_num"] == 60
+    assert result["q1"]["page_num_mismatch"] is True
+
+
+def test_build_gold_lookup_raises_on_missing_matched_page_num_key(tmp_path: Path) -> None:
+    f = tmp_path / "examples.jsonl"
+    record = _make_record("q1")
+    del record["evidence"][0]["matched_page_num"]
+    _write_jsonl(f, [record])
+    with pytest.raises(GoldLookupError, match="matched_page_num"):
+        build_gold_lookup(f)

@@ -1,4 +1,4 @@
-"""Tests for retrieval_scoring.py — M4.1 retrieval evaluation targets."""
+"""Tests for retrieval_scoring.py — M4.1/M4.3 retrieval evaluation targets."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from financebench_eval_harness.retrieval_scoring import (
     answerable_hit,
     doc_hit,
     evidence_text_hit,
+    normalize_doc_name,
     page_hit,
     score_retrieval_result,
     summarize_retrieval_scores,
@@ -208,3 +209,64 @@ def test_summarize_retrieval_scores_empty_list() -> None:
     summary = summarize_retrieval_scores([])
     assert summary["example_count"] == 0
     assert summary["doc_hit_rate"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# M4.3 — normalize_doc_name (public function, replaces _strip_pdf)
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_doc_name_strips_pdf_suffix() -> None:
+    assert normalize_doc_name("3M_2018_10K.pdf") == "3m_2018_10k"
+
+
+def test_normalize_doc_name_strips_uppercase_pdf_suffix() -> None:
+    assert normalize_doc_name("3M_2018_10K.PDF") == "3m_2018_10k"
+
+
+def test_normalize_doc_name_lowercases_result() -> None:
+    assert normalize_doc_name("AMAZON_2019_10K") == "amazon_2019_10k"
+
+
+def test_normalize_doc_name_strips_surrounding_whitespace() -> None:
+    assert normalize_doc_name("  3M_2018_10K.pdf  ") == "3m_2018_10k"
+
+
+# ---------------------------------------------------------------------------
+# M4.3 — page_hit uses matched_page_num (the real bug fix)
+# ---------------------------------------------------------------------------
+
+_GOLD_WITH_OFFSET = {
+    "evidence": [
+        {
+            "doc_name": "3M_2018_10K",
+            "gold_page_num": 59,
+            "matched_page_num": 60,  # PDF extraction page (what the retriever sees)
+            "evidence_text": "purchases of property plant and equipment 1577",
+        }
+    ]
+}
+
+
+def test_page_hit_true_when_chunk_matches_matched_page_num() -> None:
+    # chunk page_num=60 (PDF index) matches matched_page_num=60, not gold_page_num=59
+    result = {"retrieved": [{"rank": 1, "doc_name": "3M_2018_10K.pdf", "page_num": 60, "score": 0.9, "text": ""}]}
+    assert page_hit(result, _GOLD_WITH_OFFSET) is True
+
+
+def test_page_hit_true_when_chunk_matches_gold_page_num() -> None:
+    # chunk page_num=59 matches gold_page_num=59 (accept both candidates)
+    result = {"retrieved": [{"rank": 1, "doc_name": "3M_2018_10K.pdf", "page_num": 59, "score": 0.9, "text": ""}]}
+    assert page_hit(result, _GOLD_WITH_OFFSET) is True
+
+
+def test_page_hit_false_when_chunk_page_matches_neither_candidate() -> None:
+    result = {"retrieved": [{"rank": 1, "doc_name": "3M_2018_10K.pdf", "page_num": 99, "score": 0.9, "text": ""}]}
+    assert page_hit(result, _GOLD_WITH_OFFSET) is False
+
+
+def test_page_hit_works_without_matched_page_num_key() -> None:
+    # Evidence item with only gold_page_num (no matched_page_num key)
+    gold = {"evidence": [{"doc_name": "3M_2018_10K", "gold_page_num": 59, "evidence_text": "..."}]}
+    result = {"retrieved": [{"rank": 1, "doc_name": "3M_2018_10K.pdf", "page_num": 59, "score": 0.9, "text": ""}]}
+    assert page_hit(result, gold) is True

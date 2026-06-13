@@ -86,9 +86,17 @@ def _extract_evidence_entry(record: dict[str, Any], question_id: str) -> dict[st
             f"Record '{question_id}': evidence[0] missing key 'page_text'"
         )
 
+    if "matched_page_num" not in ev:
+        raise GoldLookupError(
+            f"Record '{question_id}': evidence[0] missing key 'matched_page_num'"
+        )
+    matched_page_num = ev["matched_page_num"]
+
     return {
         "evidence_doc_name": doc_name,
         "evidence_page_num": gold_page_num,
+        "matched_page_num": matched_page_num,
+        "page_num_mismatch": gold_page_num != matched_page_num,
         "evidence_text": evidence_text,
         "page_text": ev["page_text"],
     }
