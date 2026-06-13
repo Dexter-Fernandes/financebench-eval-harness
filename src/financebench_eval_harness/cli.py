@@ -888,7 +888,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         summary = score_retrieval_run(pipeline_cfg, run_dir)
 
         report_path = generate_retrieval_report(
-            summary, args.run_id, pipeline_cfg, output_dir=args.report_dir
+            summary, args.run_id, pipeline_cfg, output_dir=args.report_dir, run_dir=run_dir
         )
 
         print(f"Scored {summary['example_count']} questions.")

@@ -101,15 +101,26 @@ def generate_retrieval_report(
     config: PipelineConfig,
     *,
     output_dir: Path,
+    run_dir: Path | None = None,
 ) -> Path:
     """Write a markdown report for a retrieval evaluation run.
+
+    When run_dir is provided, generates a rich report with metadata, focused metrics,
+    best/worst examples, and failure type analysis. Otherwise renders a simple summary table.
 
     Returns the path to the written report.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     report_path = output_dir / f"retrieval_eval_{run_id}.md"
-    report_path.write_text(_render_retrieval_report(summary, run_id, config), encoding="utf-8")
+    if run_dir is not None:
+        leaderboard = json.loads((Path(run_dir) / "retrieval_leaderboard.json").read_text(encoding="utf-8"))
+        per_question = _load_scores_jsonl(Path(run_dir) / "retrieval_scores.jsonl")
+        gold_examples = _load_gold_examples(config.questions_path)
+        content = _render_rich_retrieval_report(leaderboard, per_question, gold_examples, run_id)
+    else:
+        content = _render_retrieval_report(summary, run_id, config)
+    report_path.write_text(content, encoding="utf-8")
     return report_path
 
 
@@ -172,6 +183,130 @@ def _build_leaderboard_summary(
         "chunk_size": config.chunking.chunk_size,
         "chunk_overlap": config.chunking.chunk_overlap,
     }
+
+
+def _load_scores_jsonl(path: Path) -> list[dict]:
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            rows.append(json.loads(line))
+    return rows
+
+
+def _classify_failures(per_question: list[dict], k: int) -> dict[str, int]:
+    doc_miss = page_miss = text_miss = 0
+    for row in per_question:
+        if not row.get(f"doc_hit@{k}"):
+            doc_miss += 1
+        elif not row.get(f"page_hit@{k}"):
+            page_miss += 1
+        elif not row.get(f"evidence_text_hit@{k}"):
+            text_miss += 1
+    return {"doc_miss": doc_miss, "page_miss": page_miss, "text_miss": text_miss}
+
+
+def _render_rich_retrieval_report(
+    leaderboard: dict,
+    per_question: list[dict],
+    gold_examples: dict[str, dict],
+    run_id: str,
+) -> str:
+    k = leaderboard.get("k", 5)
+    n = leaderboard.get("num_questions", 0)
+    lines: list[str] = [f"# Retrieval Evaluation — {run_id}", ""]
+
+    # --- Run Metadata ---
+    lines += [
+        "## Run Metadata", "",
+        "| Setting | Value |", "| --- | --- |",
+        f"| run_id | {leaderboard.get('run_id', run_id)} |",
+        f"| num_questions | {n} |",
+        f"| k | {k} |",
+        f"| evidence_overlap_threshold | {leaderboard.get('evidence_overlap_threshold')} |",
+        f"| embedding_provider | {leaderboard.get('embedding_provider')} |",
+        f"| embedding_model_name | {leaderboard.get('embedding_model_name')} |",
+        f"| chunking_strategy | {leaderboard.get('chunking_strategy')} |",
+        f"| chunk_size | {leaderboard.get('chunk_size')} |",
+        f"| chunk_overlap | {leaderboard.get('chunk_overlap')} |",
+        "",
+    ]
+
+    # --- Retrieval Metrics ---
+    def _fmt(v: object) -> str:
+        if v is None:
+            return "—"
+        if isinstance(v, float):
+            return f"{v:.4f}"
+        return str(v)
+
+    lines += [
+        "## Retrieval Metrics", "",
+        "| Metric | Value |", "| --- | ---: |",
+        f"| doc_hit@k | {_fmt(leaderboard.get('doc_hit@k'))} |",
+        f"| page_hit@k | {_fmt(leaderboard.get('page_hit@k'))} |",
+        f"| evidence_text_hit@k | {_fmt(leaderboard.get('evidence_text_hit@k'))} |",
+        f"| mrr@k | {_fmt(leaderboard.get('mrr@k'))} |",
+        f"| mean_best_evidence_overlap | {_fmt(leaderboard.get('mean_best_evidence_overlap'))} |",
+        f"| median_first_doc_hit_rank | {_fmt(leaderboard.get('median_first_doc_hit_rank'))} |",
+        f"| median_first_page_hit_rank | {_fmt(leaderboard.get('median_first_page_hit_rank'))} |",
+        "",
+    ]
+
+    # --- Best Examples ---
+    best = [
+        r for r in per_question
+        if r.get(f"doc_hit@{k}") and r.get(f"page_hit@{k}")
+    ]
+    best.sort(key=lambda r: r.get("best_evidence_overlap", 0.0), reverse=True)
+    lines += ["## Best Examples", ""]
+    if best:
+        for row in best[:3]:
+            qid = row["question_id"]
+            gold = gold_examples.get(qid, {})
+            lines += [
+                f"### {qid}",
+                f"- **Company**: {gold.get('company', '—')}",
+                f"- **Document**: {row.get('gold_doc_name', '—')} (page {row.get('gold_page_num', '—')})",
+                f"- **Question**: {gold.get('question', '—')}",
+                f"- **Gold answer**: {gold.get('gold_answer', '—')}",
+                f"- **Evidence overlap**: {row.get('best_evidence_overlap', 0.0):.4f}",
+                "",
+            ]
+    else:
+        lines += ["_(no questions with both doc and page hit)_", ""]
+
+    # --- Worst Examples ---
+    worst = [r for r in per_question if not r.get(f"doc_hit@{k}")]
+    worst.sort(key=lambda r: r.get("best_evidence_overlap", 0.0))
+    lines += ["## Worst Examples", ""]
+    if worst:
+        for row in worst[:3]:
+            qid = row["question_id"]
+            gold = gold_examples.get(qid, {})
+            lines += [
+                f"### {qid}",
+                f"- **Company**: {gold.get('company', '—')}",
+                f"- **Document**: {row.get('gold_doc_name', '—')} (page {row.get('gold_page_num', '—')})",
+                f"- **Question**: {gold.get('question', '—')}",
+                f"- **Gold answer**: {gold.get('gold_answer', '—')}",
+                f"- **Best evidence overlap**: {row.get('best_evidence_overlap', 0.0):.4f}",
+                "",
+            ]
+    else:
+        lines += ["_(all questions had document hits)_", ""]
+
+    # --- Common Failure Types ---
+    failures = _classify_failures(per_question, k)
+    lines += [
+        "## Common Failure Types", "",
+        "| Failure | Count | Rate |", "| --- | ---: | ---: |",
+        f"| Document not retrieved | {failures['doc_miss']} | {failures['doc_miss']/n:.1%} |" if n else "| Document not retrieved | 0 | — |",
+        f"| Document found, wrong page | {failures['page_miss']} | {failures['page_miss']/n:.1%} |" if n else "| Document found, wrong page | 0 | — |",
+        f"| Page found, evidence below threshold | {failures['text_miss']} | {failures['text_miss']/n:.1%} |" if n else "| Page found, evidence below threshold | 0 | — |",
+        "",
+    ]
+
+    return "\n".join(lines)
 
 
 def _load_retrieval_results(path: Path) -> dict[str, dict]:

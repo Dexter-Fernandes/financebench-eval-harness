@@ -491,3 +491,61 @@ def test_leaderboard_contains_config_metadata(tmp_path: Path) -> None:
     assert d["chunk_size"] == 800
     assert d["chunk_overlap"] == 150
     assert d["evidence_overlap_threshold"] == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------
+# M4.11 — rich retrieval report
+# ---------------------------------------------------------------------------
+
+
+def _rich_report_content(tmp_path: Path, top_k: int = 5) -> str:
+    """Helper: run score_retrieval_run + generate_retrieval_report with run_dir; return content."""
+    cfg = _make_config(tmp_path, top_k=top_k)
+    run_dir = tmp_path / "run_001"
+    run_dir.mkdir(exist_ok=True)
+    _write_jsonl(
+        run_dir / "retrieval_results.jsonl",
+        [_make_retrieval_result("q1", "3M_2018_10K.pdf", 60, "purchases of property plant and equipment 1577")],
+    )
+    _write_jsonl(
+        cfg.questions_path,
+        [_make_gold_example("q1", "3M_2018_10K", 59, 60, "purchases of property plant and equipment 1577")],
+    )
+    summary = score_retrieval_run(cfg, run_dir)
+    report_dir = tmp_path / "reports"
+    report_path = generate_retrieval_report(summary, "run_001", cfg, output_dir=report_dir, run_dir=run_dir)
+    return report_path.read_text()
+
+
+def test_rich_report_metadata_section_contains_embedding_provider(tmp_path: Path) -> None:
+    content = _rich_report_content(tmp_path)
+    assert "embedding_provider" in content
+    assert "mock" in content
+
+
+def test_rich_report_metadata_section_contains_chunking_fields(tmp_path: Path) -> None:
+    content = _rich_report_content(tmp_path)
+    assert "chunking_strategy" in content
+    assert "chunk_size" in content
+
+
+def test_rich_report_metrics_section_contains_mrr_at_k(tmp_path: Path) -> None:
+    content = _rich_report_content(tmp_path)
+    assert "mrr@k" in content
+    assert "mean_best_evidence_overlap" in content
+
+
+def test_rich_report_has_best_examples_section(tmp_path: Path) -> None:
+    content = _rich_report_content(tmp_path)
+    assert "## Best Examples" in content
+
+
+def test_rich_report_has_worst_examples_section(tmp_path: Path) -> None:
+    content = _rich_report_content(tmp_path)
+    assert "## Worst Examples" in content
+
+
+def test_rich_report_has_common_failure_types_section(tmp_path: Path) -> None:
+    content = _rich_report_content(tmp_path)
+    assert "## Common Failure Types" in content
+    assert "Document not retrieved" in content

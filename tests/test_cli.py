@@ -2230,6 +2230,6 @@ def test_eval_retrieval_report_contains_key_metrics(tmp_path: Path, capsys) -> N
 
     content = (reports_dir / "retrieval_eval_run_001.md").read_text()
     assert "run_001" in content
-    assert "example_count" in content
-    assert "doc_hit" in content
-    assert "top_k" in content
+    assert "num_questions" in content
+    assert "doc_hit@k" in content
+    assert "embedding_provider" in content
