@@ -57,7 +57,13 @@ def score_retrieval_run(
         gold = gold_examples.get(qid)
         if gold is None:
             continue
-        row: dict = {"question_id": qid}
+        evidence = gold.get("evidence", [])
+        row: dict = {
+            "question_id": qid,
+            "k": config.top_k,
+            "gold_doc_name": evidence[0]["doc_name"] if evidence else None,
+            "gold_page_num": evidence[0]["gold_page_num"] if evidence else None,
+        }
         row.update(score_hit_at_k(result, gold, ks=ks, overlap_threshold=config.evidence_overlap_threshold))
         row.update(score_rank_metrics(result, gold, overlap_threshold=config.evidence_overlap_threshold))
         row.update(score_evidence_overlap(result, gold, threshold=config.evidence_overlap_threshold, top_k=config.top_k))

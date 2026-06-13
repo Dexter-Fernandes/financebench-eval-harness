@@ -415,3 +415,30 @@ def test_generate_retrieval_report_creates_output_dir(tmp_path: Path) -> None:
     nested_dir = tmp_path / "a" / "b" / "c"
     generate_retrieval_report(_make_summary(), "run_001", cfg, output_dir=nested_dir)
     assert nested_dir.is_dir()
+
+
+# ---------------------------------------------------------------------------
+# M4.9 — gold context and k in per-question rows
+# ---------------------------------------------------------------------------
+
+
+def _read_scores(run_dir: Path) -> list[dict]:
+    return [json.loads(l) for l in (run_dir / "retrieval_scores.jsonl").read_text().splitlines() if l.strip()]
+
+
+def test_score_retrieval_run_row_contains_k(tmp_path: Path) -> None:
+    run_dir = _run_with_one_example(tmp_path, top_k=7)
+    rows = _read_scores(run_dir)
+    assert rows[0]["k"] == 7
+
+
+def test_score_retrieval_run_row_contains_gold_doc_name(tmp_path: Path) -> None:
+    run_dir = _run_with_one_example(tmp_path)
+    rows = _read_scores(run_dir)
+    assert rows[0]["gold_doc_name"] == "3M_2018_10K"
+
+
+def test_score_retrieval_run_row_contains_gold_page_num(tmp_path: Path) -> None:
+    run_dir = _run_with_one_example(tmp_path)
+    rows = _read_scores(run_dir)
+    assert rows[0]["gold_page_num"] == 59
