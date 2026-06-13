@@ -62,6 +62,7 @@ from financebench_eval_harness.report import (
     generate_baseline_report,
 )
 from financebench_eval_harness.eval_retrieval import (
+    format_retrieval_failure_report,
     generate_retrieval_report,
     score_retrieval_run,
 )
@@ -375,6 +376,30 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("reports"),
         metavar="DIR",
         help="Directory to write the markdown report (default: reports/)",
+    )
+
+    p_inspect_failure = subparsers.add_parser(
+        "inspect-retrieval-failure",
+        help="Print detailed retrieval inspection for a single question from a scored run.",
+    )
+    p_inspect_failure.add_argument(
+        "--config",
+        type=Path,
+        default=Path("configs/retrieval.yaml"),
+        metavar="PATH",
+        help="Retrieval pipeline config YAML (default: configs/retrieval.yaml)",
+    )
+    p_inspect_failure.add_argument(
+        "--run-id",
+        required=True,
+        metavar="RUN_ID",
+        help="Run ID to inspect (subdirectory of runs_dir).",
+    )
+    p_inspect_failure.add_argument(
+        "--question-id",
+        required=True,
+        metavar="QUESTION_ID",
+        help="Question ID to inspect.",
     )
 
     return parser
@@ -893,6 +918,25 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         print(f"Scored {summary['example_count']} questions.")
         print(f"Retrieval report: {report_path}")
+        return 0
+
+    if args.command == "inspect-retrieval-failure":
+        try:
+            pipeline_cfg = load_pipeline_config(args.config)
+        except PipelineConfigError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        run_dir = pipeline_cfg.runs_dir / args.run_id
+        for p in (run_dir / "retrieval_results.jsonl", run_dir / "retrieval_scores.jsonl"):
+            if not p.is_file():
+                print(f"File not found: {p}", file=sys.stderr)
+                return 1
+        try:
+            report = format_retrieval_failure_report(pipeline_cfg, run_dir, args.question_id)
+        except KeyError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(report)
         return 0
 
     parser.error(f"Unknown command: {args.command}")

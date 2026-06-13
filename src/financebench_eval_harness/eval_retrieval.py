@@ -26,7 +26,7 @@ from financebench_eval_harness.retrieval_scoring import (
     summarize_rank_metrics,
 )
 
-__all__ = ["score_retrieval_run", "generate_retrieval_report"]
+__all__ = ["score_retrieval_run", "generate_retrieval_report", "format_retrieval_failure_report"]
 
 _DEFAULT_KS: tuple[int, ...] = (1, 5, 10, 20)
 
@@ -341,6 +341,86 @@ def _render_rich_retrieval_report(
     lines.append("")
 
     return "\n".join(lines)
+
+
+def format_retrieval_failure_report(
+    config: PipelineConfig,
+    run_dir: Path,
+    question_id: str,
+) -> str:
+    """Return a plain-text inspection report for one question from a scored retrieval run.
+
+    Raises KeyError if question_id is not found in retrieval_scores.jsonl.
+    """
+    run_dir = Path(run_dir)
+    results = _load_retrieval_results(run_dir / "retrieval_results.jsonl")
+    scores = {r["question_id"]: r for r in _load_scores_jsonl(run_dir / "retrieval_scores.jsonl")}
+    gold_examples = _load_gold_examples(config.questions_path)
+
+    if question_id not in scores:
+        raise KeyError(f"Question ID not found in retrieval scores: {question_id!r}")
+
+    score_row = scores[question_id]
+    gold = gold_examples.get(question_id, {})
+    result = results.get(question_id, {})
+    evidence_items = gold.get("evidence", [])
+    k = score_row.get("k", config.top_k)
+
+    lines: list[str] = []
+    lines.append(f"Question ID: {question_id}")
+    lines.append("")
+    lines.append("Question:")
+    lines.append(f"  {gold.get('question', '—')}")
+    lines.append("")
+
+    lines.append("Gold:")
+    for ev in evidence_items:
+        lines.append(f"  Document: {ev.get('doc_name', '—')}")
+        lines.append(f"  Page: {ev.get('gold_page_num', '—')}")
+        lines.append("  Evidence:")
+        lines.append(f"    {ev.get('evidence_text', '—')}")
+    lines.append("")
+
+    lines.append("Retrieval Scores:")
+    lines.append(f"  doc_hit@k:             {score_row.get(f'doc_hit@{k}', '—')}")
+    lines.append(f"  page_hit@k:            {score_row.get(f'page_hit@{k}', '—')}")
+    lines.append(f"  evidence_text_hit@k:   {score_row.get(f'evidence_text_hit@{k}', '—')}")
+    overlap = score_row.get("best_evidence_overlap", 0.0)
+    lines.append(f"  best_evidence_overlap: {overlap:.4f}")
+    labels = score_row.get("failure_labels", [])
+    lines.append(f"  failure_labels:        {json.dumps(labels)}")
+    lines.append("")
+
+    lines.append("Top Retrieved Chunks:")
+    for chunk in result.get("retrieved", []):
+        chunk_overlap = _chunk_evidence_overlap(chunk.get("text", ""), evidence_items)
+        lines.append("")
+        lines.append(f"  Rank {chunk.get('rank', '?')}")
+        lines.append(f"  Document: {chunk.get('doc_name', '—')}")
+        lines.append(f"  Page: {chunk.get('page_num', '—')}")
+        lines.append(f"  Score: {chunk.get('score', 0.0):.4f}")
+        lines.append(f"  Evidence overlap: {chunk_overlap:.4f}")
+        lines.append("  Text:")
+        lines.append(f"    {chunk.get('text', '')[:300]}")
+
+    return "\n".join(lines)
+
+
+def _chunk_evidence_overlap(chunk_text: str, evidence_items: list[dict]) -> float:
+    """Compute max overlap between a single chunk and all gold evidence texts."""
+    norm_chunk = chunk_text.lower()
+    chunk_tokens = set(norm_chunk.split())
+    best = 0.0
+    for ev in evidence_items:
+        ev_text = ev.get("evidence_text", "")
+        norm_ev = ev_text.lower()
+        if norm_ev and norm_ev in norm_chunk:
+            return 1.0
+        ev_tokens = set(norm_ev.split())
+        if ev_tokens:
+            coverage = len(ev_tokens & chunk_tokens) / len(ev_tokens)
+            best = max(best, coverage)
+    return best
 
 
 def _load_retrieval_results(path: Path) -> dict[str, dict]:

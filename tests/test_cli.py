@@ -2233,3 +2233,92 @@ def test_eval_retrieval_report_contains_key_metrics(tmp_path: Path, capsys) -> N
     assert "num_questions" in content
     assert "doc_hit@k" in content
     assert "embedding_provider" in content
+
+
+# ---------------------------------------------------------------------------
+# inspect-retrieval-failure command
+# ---------------------------------------------------------------------------
+
+
+def _setup_inspect_failure(tmp_path: Path, *, question_id: str = "q001") -> tuple[Path, str]:
+    """Set up config, gold examples, retrieval results, and scores files.
+
+    Returns (config_path, question_id).
+    """
+    from financebench_eval_harness.eval_retrieval import score_retrieval_run
+    from financebench_eval_harness.pipeline_config import load_pipeline_config
+
+    config_path, run_dir, _ = _setup_eval_retrieval(tmp_path)
+    cfg = load_pipeline_config(config_path)
+    score_retrieval_run(cfg, run_dir)
+    return config_path, question_id
+
+
+def _inspect_failure_cmd(config_path: Path, question_id: str) -> list[str]:
+    return [
+        "inspect-retrieval-failure",
+        "--config", str(config_path),
+        "--run-id", "run_001",
+        "--question-id", question_id,
+    ]
+
+
+def test_inspect_retrieval_failure_exits_zero(tmp_path: Path, capsys) -> None:
+    config_path, question_id = _setup_inspect_failure(tmp_path)
+    exit_code = main(_inspect_failure_cmd(config_path, question_id))
+    assert exit_code == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_inspect_retrieval_failure_exits_1_when_scores_file_missing(tmp_path: Path, capsys) -> None:
+    config_path, question_id = _setup_inspect_failure(tmp_path)
+    from financebench_eval_harness.pipeline_config import load_pipeline_config
+    cfg = load_pipeline_config(config_path)
+    (cfg.runs_dir / "run_001" / "retrieval_scores.jsonl").unlink()
+
+    exit_code = main(_inspect_failure_cmd(config_path, question_id))
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "not found" in captured.err
+
+
+def test_inspect_retrieval_failure_exits_1_when_question_not_found(tmp_path: Path, capsys) -> None:
+    config_path, _ = _setup_inspect_failure(tmp_path)
+
+    exit_code = main(_inspect_failure_cmd(config_path, "nonexistent_question_id"))
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "nonexistent_question_id" in captured.err
+
+
+def test_inspect_retrieval_failure_stdout_contains_question_text(tmp_path: Path, capsys) -> None:
+    config_path, question_id = _setup_inspect_failure(tmp_path)
+    main(_inspect_failure_cmd(config_path, question_id))
+    assert _EVAL_GOLD_EXAMPLE["question"] in capsys.readouterr().out
+
+
+def test_inspect_retrieval_failure_stdout_contains_gold_document(tmp_path: Path, capsys) -> None:
+    config_path, question_id = _setup_inspect_failure(tmp_path)
+    main(_inspect_failure_cmd(config_path, question_id))
+    gold_doc = _EVAL_GOLD_EXAMPLE["evidence"][0]["doc_name"]
+    assert gold_doc in capsys.readouterr().out
+
+
+def test_inspect_retrieval_failure_stdout_contains_failure_labels(tmp_path: Path, capsys) -> None:
+    config_path, question_id = _setup_inspect_failure(tmp_path)
+    main(_inspect_failure_cmd(config_path, question_id))
+    assert "failure_labels" in capsys.readouterr().out
+
+
+def test_inspect_retrieval_failure_stdout_contains_chunk_rank(tmp_path: Path, capsys) -> None:
+    config_path, question_id = _setup_inspect_failure(tmp_path)
+    main(_inspect_failure_cmd(config_path, question_id))
+    assert "Rank 1" in capsys.readouterr().out
+
+
+def test_inspect_retrieval_failure_stdout_contains_per_chunk_overlap(tmp_path: Path, capsys) -> None:
+    config_path, question_id = _setup_inspect_failure(tmp_path)
+    main(_inspect_failure_cmd(config_path, question_id))
+    assert "Evidence overlap" in capsys.readouterr().out
