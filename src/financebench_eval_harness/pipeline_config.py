@@ -10,7 +10,7 @@ from financebench_eval_harness.chunking import ChunkingConfig
 from financebench_eval_harness.embedding import EmbeddingConfig
 
 
-_REQUIRED_PATH_KEYS = ("pages_path", "chunks_path", "index_dir", "questions_path", "runs_dir", "evidence_overlap_threshold")
+_REQUIRED_KEYS = ("pages_path", "chunks_path", "index_dir", "questions_path", "runs_dir", "evidence_overlap_threshold")
 
 
 @dataclass(frozen=True)
@@ -78,7 +78,7 @@ def load_pipeline_config(path: Path) -> PipelineConfig:
             f"Pipeline config 'retrieval' must be a mapping: {path}"
         )
 
-    missing = [k for k in _REQUIRED_PATH_KEYS if k not in r]
+    missing = [k for k in _REQUIRED_KEYS if k not in r]
     if missing:
         raise PipelineConfigError(
             f"Pipeline config missing required key(s): {', '.join(missing)}"
