@@ -50,7 +50,7 @@ def _build_and_load(
     client: MockEmbeddingClient,
     idx_dir: Path,
 ) -> tuple:
-    config = RetrievalConfig(chunking=CHUNKING_CFG)
+    config = RetrievalConfig(chunking=CHUNKING_CFG, evidence_overlap_threshold=0.5)
     build_index(chunks, client, config, idx_dir)
     return load_index(idx_dir)
 
@@ -79,7 +79,7 @@ class TestRetrievalPipeline:
 
     def test_vector_index_can_be_built(self, tmp_path: Path) -> None:
         chunks = chunk_pages(PAGES, CHUNKING_CFG)
-        config = RetrievalConfig(chunking=CHUNKING_CFG)
+        config = RetrievalConfig(chunking=CHUNKING_CFG, evidence_overlap_threshold=0.5)
         meta = build_index(chunks, make_client(), config, tmp_path / "idx")
         assert isinstance(meta, IndexMetadata)
         assert meta.chunk_count == len(chunks)

@@ -26,6 +26,7 @@ _VALID_YAML = textwrap.dedent("""\
       questions_path: data/processed/financebench/examples.jsonl
       runs_dir: runs
       top_k: 5
+      evidence_overlap_threshold: 0.5
       chunking:
         strategy: recursive_text
         chunk_size: 800
@@ -46,6 +47,7 @@ _YAML_WITHOUT_TOP_K = textwrap.dedent("""\
       index_dir: data/idx
       questions_path: data/q.jsonl
       runs_dir: runs
+      evidence_overlap_threshold: 0.5
       chunking:
         strategy: recursive_text
         chunk_size: 400
@@ -76,6 +78,7 @@ class TestPipelineConfig:
             questions_path=Path("data/q.jsonl"),
             runs_dir=Path("runs"),
             top_k=5,
+            evidence_overlap_threshold=0.5,
             chunking=ChunkingConfig(chunk_size=800, chunk_overlap=150),
             embedding=EmbeddingConfig(provider="mock", model_name="mock-embed"),
         )
@@ -95,6 +98,29 @@ class TestPipelineConfig:
         cfg = self._make()
         with pytest.raises(Exception):
             cfg.top_k = 10  # type: ignore[misc]
+
+    def test_to_dict_contains_top_level_keys(self) -> None:
+        cfg = self._make()
+        d = cfg.to_dict()
+        assert set(d.keys()) >= {"top_k", "evidence_overlap_threshold", "questions_path", "chunking", "embedding"}
+
+    def test_to_dict_chunking_fields(self) -> None:
+        cfg = self._make()
+        d = cfg.to_dict()
+        assert d["chunking"]["chunk_size"] == 800
+        assert d["chunking"]["chunk_overlap"] == 150
+
+    def test_to_dict_embedding_fields(self) -> None:
+        cfg = self._make()
+        d = cfg.to_dict()
+        assert d["embedding"]["provider"] == "mock"
+        assert d["embedding"]["model_name"] == "mock-embed"
+
+    def test_to_dict_paths_are_strings(self) -> None:
+        cfg = self._make()
+        d = cfg.to_dict()
+        assert isinstance(d["questions_path"], str)
+        assert isinstance(d["chunks_path"], str)
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +196,17 @@ class TestLoadPipelineConfig:
         p = _write_config(tmp_path, "other_key: {}\n")
         with pytest.raises(PipelineConfigError, match="retrieval"):
             load_pipeline_config(p)
+
+    def test_good_rank_threshold_defaults_to_3_when_omitted(self, tmp_path: Path) -> None:
+        p = _write_config(tmp_path, _VALID_YAML)
+        cfg = load_pipeline_config(p)
+        assert cfg.good_rank_threshold == 3
+
+    def test_good_rank_threshold_round_trips_when_set(self, tmp_path: Path) -> None:
+        yaml_with_threshold = _VALID_YAML + "  good_rank_threshold: 2\n"
+        p = _write_config(tmp_path, yaml_with_threshold)
+        cfg = load_pipeline_config(p)
+        assert cfg.good_rank_threshold == 2
 
     def test_raises_when_required_path_missing(self, tmp_path: Path) -> None:
         yaml_missing_chunks = textwrap.dedent("""\

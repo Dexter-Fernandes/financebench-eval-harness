@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -9,7 +10,7 @@ from financebench_eval_harness.chunking import ChunkingConfig
 from financebench_eval_harness.embedding import EmbeddingConfig
 
 
-_REQUIRED_PATH_KEYS = ("pages_path", "chunks_path", "index_dir", "questions_path", "runs_dir")
+_REQUIRED_KEYS = ("pages_path", "chunks_path", "index_dir", "questions_path", "runs_dir", "evidence_overlap_threshold")
 
 
 @dataclass(frozen=True)
@@ -22,8 +23,34 @@ class PipelineConfig:
     questions_path: Path
     runs_dir: Path
     top_k: int
+    evidence_overlap_threshold: float
     chunking: ChunkingConfig
     embedding: EmbeddingConfig
+    good_rank_threshold: int = 3
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "top_k": self.top_k,
+            "evidence_overlap_threshold": self.evidence_overlap_threshold,
+            "good_rank_threshold": self.good_rank_threshold,
+            "questions_path": str(self.questions_path),
+            "chunks_path": str(self.chunks_path),
+            "index_dir": str(self.index_dir),
+            "runs_dir": str(self.runs_dir),
+            "chunking": {
+                "strategy": self.chunking.strategy,
+                "chunk_size": self.chunking.chunk_size,
+                "chunk_overlap": self.chunking.chunk_overlap,
+                "min_chunk_chars": self.chunking.min_chunk_chars,
+            },
+            "embedding": {
+                "provider": self.embedding.provider,
+                "model_name": self.embedding.model_name,
+                "base_url": self.embedding.base_url,
+                "timeout_seconds": self.embedding.timeout_seconds,
+                "batch_size": self.embedding.batch_size,
+            },
+        }
 
 
 class PipelineConfigError(ValueError):
@@ -51,7 +78,7 @@ def load_pipeline_config(path: Path) -> PipelineConfig:
             f"Pipeline config 'retrieval' must be a mapping: {path}"
         )
 
-    missing = [k for k in _REQUIRED_PATH_KEYS if k not in r]
+    missing = [k for k in _REQUIRED_KEYS if k not in r]
     if missing:
         raise PipelineConfigError(
             f"Pipeline config missing required key(s): {', '.join(missing)}"
@@ -81,6 +108,8 @@ def load_pipeline_config(path: Path) -> PipelineConfig:
         questions_path=Path(r["questions_path"]),
         runs_dir=Path(r["runs_dir"]),
         top_k=int(r.get("top_k", 5)),
+        evidence_overlap_threshold=float(r["evidence_overlap_threshold"]),
         chunking=chunking,
         embedding=embedding,
+        good_rank_threshold=int(r.get("good_rank_threshold", 3)),
     )

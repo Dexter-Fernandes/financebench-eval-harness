@@ -36,7 +36,7 @@ def make_chunk(chunk_id: str, text: str = "some financial text") -> Chunk:
 
 
 CHUNKING = ChunkingConfig(chunk_size=800, chunk_overlap=150, min_chunk_chars=50)
-RETRIEVAL_CFG = RetrievalConfig(chunking=CHUNKING)
+RETRIEVAL_CFG = RetrievalConfig(chunking=CHUNKING, evidence_overlap_threshold=0.5)
 EMBED_CFG = EmbeddingConfig(provider="mock", model_name="mock-embed")
 EMBED_DIM = 8
 

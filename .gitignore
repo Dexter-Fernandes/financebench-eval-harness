@@ -233,7 +233,7 @@ runs/
 outputs/
 artifacts/
 reports/generated/
-reports/baseline_*.md
+reports/*.md
 model_cache/
 models/
 .ollama/
