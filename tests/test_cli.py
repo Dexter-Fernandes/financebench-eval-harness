@@ -980,6 +980,7 @@ def _write_retrieval_config(path: Path) -> None:
     path.write_text(
         "\n".join([
             "retrieval:",
+            "  evidence_overlap_threshold: 0.5",
             "  chunking:",
             "    strategy: recursive_text",
             "    chunk_size: 200",
@@ -1901,6 +1902,7 @@ def _write_pipeline_config(
             f"  questions_path: {questions_path}",
             f"  runs_dir: {runs_dir}",
             "  top_k: 3",
+            "  evidence_overlap_threshold: 0.5",
             "  chunking:",
             "    strategy: recursive_text",
             "    chunk_size: 200",

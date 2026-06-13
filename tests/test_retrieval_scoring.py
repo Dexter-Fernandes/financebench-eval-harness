@@ -10,6 +10,7 @@ from financebench_eval_harness.retrieval_scoring import (
     evidence_text_hit,
     normalize_doc_name,
     page_hit,
+    score_evidence_overlap,
     score_hit_at_k,
     score_rank_metrics,
     score_retrieval_result,
@@ -557,3 +558,171 @@ def test_summarize_rank_metrics_median_single_hit() -> None:
     scores = [{"doc_first_hit_rank": 1, "page_first_hit_rank": None, "evidence_text_first_hit_rank": None}]
     summary = summarize_rank_metrics(scores, ks=(5,))
     assert summary["doc_median_first_hit_rank"] == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# M4.6 — Slice 1: exact substring match → best_evidence_overlap = 1.0
+# ---------------------------------------------------------------------------
+
+_RESULT_EXACT = {
+    "retrieved": [
+        {
+            "rank": 1, "doc_name": "3M_2018_10K.pdf", "page_num": 60, "score": 0.9,
+            "text": "Total revenue was 100M. Purchases of property plant and equipment 1577. Other info here.",
+        }
+    ]
+}
+_GOLD_EXACT = {
+    "evidence": [
+        {
+            "doc_name": "3M_2018_10K",
+            "gold_page_num": 59,
+            "matched_page_num": 60,
+            "evidence_text": "Purchases of property plant and equipment 1577",
+        }
+    ]
+}
+
+
+def test_score_evidence_overlap_exact_substring_gives_1_0() -> None:
+    result = score_evidence_overlap(_RESULT_EXACT, _GOLD_EXACT)
+    assert result["best_evidence_overlap"] == pytest.approx(1.0)
+    assert result["evidence_text_hit"] is True
+
+
+# ---------------------------------------------------------------------------
+# M4.6 — Slice 2: partial match → token coverage
+# ---------------------------------------------------------------------------
+
+
+def test_score_evidence_overlap_partial_match_returns_token_coverage() -> None:
+    # Evidence: "alpha beta gamma delta" (4 tokens)
+    # Chunk contains "alpha beta gamma" but not "delta" — no substring match, 3/4 coverage
+    result = score_evidence_overlap(
+        {"retrieved": [{"rank": 1, "doc_name": "X.pdf", "page_num": 1, "score": 0.9,
+                        "text": "alpha beta gamma other words here"}]},
+        {"evidence": [{"doc_name": "X", "gold_page_num": 1, "matched_page_num": 1,
+                       "evidence_text": "alpha beta gamma delta"}]},
+    )
+    assert result["best_evidence_overlap"] == pytest.approx(0.75)
+
+
+def test_score_evidence_overlap_no_token_overlap_gives_zero() -> None:
+    result = score_evidence_overlap(
+        {"retrieved": [{"rank": 1, "doc_name": "X.pdf", "page_num": 1, "score": 0.9,
+                        "text": "completely different words here"}]},
+        {"evidence": [{"doc_name": "X", "gold_page_num": 1, "matched_page_num": 1,
+                       "evidence_text": "alpha beta gamma delta"}]},
+    )
+    assert result["best_evidence_overlap"] == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# M4.6 — Slice 3: threshold semantics for evidence_text_hit
+# ---------------------------------------------------------------------------
+
+
+def test_score_evidence_overlap_hit_true_when_overlap_exceeds_threshold() -> None:
+    # 3/4 tokens = 0.75 coverage, threshold=0.5 → hit
+    result = score_evidence_overlap(
+        {"retrieved": [{"rank": 1, "doc_name": "X.pdf", "page_num": 1, "score": 0.9,
+                        "text": "alpha beta gamma other"}]},
+        {"evidence": [{"doc_name": "X", "gold_page_num": 1, "matched_page_num": 1,
+                       "evidence_text": "alpha beta gamma delta"}]},
+        threshold=0.5,
+    )
+    assert result["evidence_text_hit"] is True
+
+
+def test_score_evidence_overlap_hit_false_when_overlap_below_threshold() -> None:
+    # 1/4 tokens = 0.25 coverage, threshold=0.5 → miss
+    result = score_evidence_overlap(
+        {"retrieved": [{"rank": 1, "doc_name": "X.pdf", "page_num": 1, "score": 0.9,
+                        "text": "alpha other words here"}]},
+        {"evidence": [{"doc_name": "X", "gold_page_num": 1, "matched_page_num": 1,
+                       "evidence_text": "alpha beta gamma delta"}]},
+        threshold=0.5,
+    )
+    assert result["evidence_text_hit"] is False
+
+
+def test_score_evidence_overlap_hit_true_when_overlap_equals_threshold() -> None:
+    # exactly at threshold → hit (inclusive)
+    result = score_evidence_overlap(
+        {"retrieved": [{"rank": 1, "doc_name": "X.pdf", "page_num": 1, "score": 0.9,
+                        "text": "alpha beta other words"}]},
+        {"evidence": [{"doc_name": "X", "gold_page_num": 1, "matched_page_num": 1,
+                       "evidence_text": "alpha beta gamma delta"}]},
+        threshold=0.5,
+    )
+    assert result["evidence_text_hit"] is True
+
+
+# ---------------------------------------------------------------------------
+# M4.6 — Slice 4: best overlap taken across multiple chunks
+# ---------------------------------------------------------------------------
+
+
+def test_score_evidence_overlap_takes_best_across_chunks() -> None:
+    # chunk A: 1/4 = 0.25; chunk B: 3/4 = 0.75; best should be 0.75
+    result = score_evidence_overlap(
+        {"retrieved": [
+            {"rank": 1, "doc_name": "X.pdf", "page_num": 1, "score": 0.9,
+             "text": "alpha only"},
+            {"rank": 2, "doc_name": "X.pdf", "page_num": 2, "score": 0.7,
+             "text": "alpha beta gamma other"},
+        ]},
+        {"evidence": [{"doc_name": "X", "gold_page_num": 1, "matched_page_num": 1,
+                       "evidence_text": "alpha beta gamma delta"}]},
+    )
+    assert result["best_evidence_overlap"] == pytest.approx(0.75)
+
+
+def test_score_evidence_overlap_takes_best_across_evidence_items() -> None:
+    # two evidence items; chunk matches second one exactly
+    result = score_evidence_overlap(
+        {"retrieved": [
+            {"rank": 1, "doc_name": "X.pdf", "page_num": 1, "score": 0.9,
+             "text": "exact match text for second item"},
+        ]},
+        {"evidence": [
+            {"doc_name": "X", "gold_page_num": 1, "matched_page_num": 1,
+             "evidence_text": "completely different unrelated text here"},
+            {"doc_name": "X", "gold_page_num": 2, "matched_page_num": 2,
+             "evidence_text": "exact match text for second item"},
+        ]},
+    )
+    assert result["best_evidence_overlap"] == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# M4.6 — Slice 5: edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_score_evidence_overlap_empty_retrieved_gives_zero() -> None:
+    result = score_evidence_overlap({"retrieved": []}, _GOLD_EXACT)
+    assert result["best_evidence_overlap"] == pytest.approx(0.0)
+    assert result["evidence_text_hit"] is False
+
+
+def test_score_evidence_overlap_empty_evidence_gives_zero() -> None:
+    result = score_evidence_overlap(_RESULT_EXACT, {"evidence": []})
+    assert result["best_evidence_overlap"] == pytest.approx(0.0)
+    assert result["evidence_text_hit"] is False
+
+
+def test_score_evidence_overlap_top_k_limits_chunks_considered() -> None:
+    # chunk at rank 2 is the match; top_k=1 should exclude it
+    result = score_evidence_overlap(
+        {"retrieved": [
+            {"rank": 1, "doc_name": "X.pdf", "page_num": 1, "score": 0.9, "text": "unrelated"},
+            {"rank": 2, "doc_name": "X.pdf", "page_num": 2, "score": 0.7,
+             "text": "alpha beta gamma delta exact evidence text"},
+        ]},
+        {"evidence": [{"doc_name": "X", "gold_page_num": 2, "matched_page_num": 2,
+                       "evidence_text": "alpha beta gamma delta exact evidence text"}]},
+        top_k=1,
+    )
+    assert result["best_evidence_overlap"] == pytest.approx(0.0)
+    assert result["evidence_text_hit"] is False

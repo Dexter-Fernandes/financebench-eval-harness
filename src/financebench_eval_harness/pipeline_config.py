@@ -9,7 +9,7 @@ from financebench_eval_harness.chunking import ChunkingConfig
 from financebench_eval_harness.embedding import EmbeddingConfig
 
 
-_REQUIRED_PATH_KEYS = ("pages_path", "chunks_path", "index_dir", "questions_path", "runs_dir")
+_REQUIRED_PATH_KEYS = ("pages_path", "chunks_path", "index_dir", "questions_path", "runs_dir", "evidence_overlap_threshold")
 
 
 @dataclass(frozen=True)
@@ -22,6 +22,7 @@ class PipelineConfig:
     questions_path: Path
     runs_dir: Path
     top_k: int
+    evidence_overlap_threshold: float
     chunking: ChunkingConfig
     embedding: EmbeddingConfig
 
@@ -81,6 +82,7 @@ def load_pipeline_config(path: Path) -> PipelineConfig:
         questions_path=Path(r["questions_path"]),
         runs_dir=Path(r["runs_dir"]),
         top_k=int(r.get("top_k", 5)),
+        evidence_overlap_threshold=float(r["evidence_overlap_threshold"]),
         chunking=chunking,
         embedding=embedding,
     )

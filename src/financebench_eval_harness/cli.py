@@ -630,7 +630,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 1
 
             embedding_config = pipeline_cfg.embedding
-            retrieval_config = RetrievalConfig(chunking=pipeline_cfg.chunking)
+            retrieval_config = RetrievalConfig(chunking=pipeline_cfg.chunking, evidence_overlap_threshold=pipeline_cfg.evidence_overlap_threshold)
             embedding_client = _build_embedding_client(embedding_config)
 
             try:

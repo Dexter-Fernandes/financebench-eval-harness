@@ -26,6 +26,7 @@ _VALID_YAML = textwrap.dedent("""\
       questions_path: data/processed/financebench/examples.jsonl
       runs_dir: runs
       top_k: 5
+      evidence_overlap_threshold: 0.5
       chunking:
         strategy: recursive_text
         chunk_size: 800
@@ -46,6 +47,7 @@ _YAML_WITHOUT_TOP_K = textwrap.dedent("""\
       index_dir: data/idx
       questions_path: data/q.jsonl
       runs_dir: runs
+      evidence_overlap_threshold: 0.5
       chunking:
         strategy: recursive_text
         chunk_size: 400
@@ -76,6 +78,7 @@ class TestPipelineConfig:
             questions_path=Path("data/q.jsonl"),
             runs_dir=Path("runs"),
             top_k=5,
+            evidence_overlap_threshold=0.5,
             chunking=ChunkingConfig(chunk_size=800, chunk_overlap=150),
             embedding=EmbeddingConfig(provider="mock", model_name="mock-embed"),
         )

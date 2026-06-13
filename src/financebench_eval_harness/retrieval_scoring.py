@@ -32,6 +32,7 @@ __all__ = [
     "score_retrieval_result",
     "score_hit_at_k",
     "score_rank_metrics",
+    "score_evidence_overlap",
     "summarize_retrieval_scores",
     "summarize_hit_at_k",
     "summarize_rank_metrics",
@@ -335,3 +336,52 @@ def summarize_rank_metrics(
         )
 
     return summary
+
+
+# ---------------------------------------------------------------------------
+# Evidence overlap scoring — M4.6
+# ---------------------------------------------------------------------------
+
+
+def _evidence_overlap(chunk_text: str, evidence_text: str) -> float:
+    """Compute overlap score between chunk and evidence.
+
+    Returns 1.0 if normalized evidence_text is a substring of normalized chunk_text.
+    Otherwise returns token coverage: len(evidence_tokens & chunk_tokens) / len(evidence_tokens).
+    Returns 0.0 if evidence_text normalizes to empty.
+    """
+    norm_chunk = _normalize_text(chunk_text)
+    norm_evidence = _normalize_text(evidence_text)
+    if not norm_evidence:
+        return 0.0
+    if norm_evidence in norm_chunk:
+        return 1.0
+    evidence_tokens = _word_tokens(evidence_text)
+    chunk_tokens = _word_tokens(chunk_text)
+    return len(evidence_tokens & chunk_tokens) / len(evidence_tokens)
+
+
+def score_evidence_overlap(
+    retrieval_result: dict,
+    gold_example: dict,
+    threshold: float = 0.5,
+    top_k: int | None = None,
+) -> dict[str, float | bool]:
+    """Compute best evidence overlap and hit status for one question.
+
+    Returns {"best_evidence_overlap": float, "evidence_text_hit": bool}.
+    best_evidence_overlap is the max _evidence_overlap score across all (chunk, evidence) pairs.
+    evidence_text_hit is True when best_evidence_overlap >= threshold.
+    """
+    chunks = _top_k_chunks(retrieval_result.get("retrieved", []), top_k)
+    evidence_items = gold_example.get("evidence", [])
+    best = 0.0
+    for chunk in chunks:
+        for ev in evidence_items:
+            score = _evidence_overlap(chunk.get("text", ""), ev["evidence_text"])
+            if score > best:
+                best = score
+    return {
+        "best_evidence_overlap": best,
+        "evidence_text_hit": best >= threshold,
+    }

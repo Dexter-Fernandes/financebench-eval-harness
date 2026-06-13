@@ -20,11 +20,11 @@ from financebench_eval_harness.chunking import ChunkingConfig
 class TestRetrievalConfig:
     def test_holds_chunking_config(self) -> None:
         chunking = ChunkingConfig(chunk_size=800, chunk_overlap=150)
-        cfg = RetrievalConfig(chunking=chunking)
+        cfg = RetrievalConfig(chunking=chunking, evidence_overlap_threshold=0.5)
         assert cfg.chunking is chunking
 
     def test_is_immutable(self) -> None:
-        cfg = RetrievalConfig(chunking=ChunkingConfig(chunk_size=800, chunk_overlap=150))
+        cfg = RetrievalConfig(chunking=ChunkingConfig(chunk_size=800, chunk_overlap=150), evidence_overlap_threshold=0.5)
         with pytest.raises(Exception):
             cfg.chunking = ChunkingConfig(chunk_size=400, chunk_overlap=80)  # type: ignore[misc]
 
@@ -35,7 +35,7 @@ class TestRetrievalConfig:
             strategy="recursive_text",
             min_chunk_chars=100,
         )
-        cfg = RetrievalConfig(chunking=chunking)
+        cfg = RetrievalConfig(chunking=chunking, evidence_overlap_threshold=0.5)
         d = cfg.to_dict()
         assert d["chunking"]["chunk_size"] == 800
         assert d["chunking"]["chunk_overlap"] == 150
@@ -43,15 +43,15 @@ class TestRetrievalConfig:
         assert d["chunking"]["min_chunk_chars"] == 100
 
     def test_to_dict_is_plain_types(self) -> None:
-        cfg = RetrievalConfig(chunking=ChunkingConfig(chunk_size=400, chunk_overlap=80))
+        cfg = RetrievalConfig(chunking=ChunkingConfig(chunk_size=400, chunk_overlap=80), evidence_overlap_threshold=0.5)
         d = cfg.to_dict()
         # Must be JSON-serialisable plain types, not dataclasses
         import json
         json.dumps(d)  # raises if not serialisable
 
-    def test_to_dict_top_level_key_is_chunking(self) -> None:
-        cfg = RetrievalConfig(chunking=ChunkingConfig(chunk_size=800, chunk_overlap=150))
-        assert set(cfg.to_dict().keys()) == {"chunking"}
+    def test_to_dict_top_level_keys(self) -> None:
+        cfg = RetrievalConfig(chunking=ChunkingConfig(chunk_size=800, chunk_overlap=150), evidence_overlap_threshold=0.5)
+        assert set(cfg.to_dict().keys()) == {"chunking", "evidence_overlap_threshold"}
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +65,7 @@ class TestLoadRetrievalConfig:
         config_file.write_text(
             "\n".join([
                 "retrieval:",
+                "  evidence_overlap_threshold: 0.5",
                 "  chunking:",
                 "    strategy: recursive_text",
                 "    chunk_size: 800",
@@ -80,12 +81,14 @@ class TestLoadRetrievalConfig:
         assert cfg.chunking.chunk_size == 800
         assert cfg.chunking.chunk_overlap == 150
         assert cfg.chunking.min_chunk_chars == 100
+        assert cfg.evidence_overlap_threshold == 0.5
 
-    def test_loads_minimal_config_with_defaults(self, tmp_path: Path) -> None:
+    def test_loads_config_with_custom_threshold(self, tmp_path: Path) -> None:
         config_file = tmp_path / "retrieval.yaml"
         config_file.write_text(
             "\n".join([
                 "retrieval:",
+                "  evidence_overlap_threshold: 0.7",
                 "  chunking:",
                 "    chunk_size: 400",
                 "    chunk_overlap: 80",
@@ -99,12 +102,14 @@ class TestLoadRetrievalConfig:
         assert cfg.chunking.chunk_overlap == 80
         assert cfg.chunking.strategy == "recursive_text"
         assert cfg.chunking.min_chunk_chars == 0
+        assert cfg.evidence_overlap_threshold == 0.7
 
     def test_roundtrip_to_dict_preserves_loaded_values(self, tmp_path: Path) -> None:
         config_file = tmp_path / "retrieval.yaml"
         config_file.write_text(
             "\n".join([
                 "retrieval:",
+                "  evidence_overlap_threshold: 0.6",
                 "  chunking:",
                 "    strategy: recursive_text",
                 "    chunk_size: 600",
@@ -120,6 +125,7 @@ class TestLoadRetrievalConfig:
         assert d["chunking"]["chunk_size"] == 600
         assert d["chunking"]["chunk_overlap"] == 120
         assert d["chunking"]["min_chunk_chars"] == 50
+        assert d["evidence_overlap_threshold"] == 0.6
 
 
 # ---------------------------------------------------------------------------
@@ -142,10 +148,25 @@ class TestLoadRetrievalConfigErrors:
     def test_missing_chunking_key_raises(self, tmp_path: Path) -> None:
         config_file = tmp_path / "retrieval.yaml"
         config_file.write_text(
-            "retrieval:\n  embedding: stuff\n", encoding="utf-8"
+            "retrieval:\n  evidence_overlap_threshold: 0.5\n", encoding="utf-8"
         )
 
         with pytest.raises(RetrievalConfigError, match="chunking"):
+            load_retrieval_config(config_file)
+
+    def test_missing_evidence_overlap_threshold_raises(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "retrieval.yaml"
+        config_file.write_text(
+            "\n".join([
+                "retrieval:",
+                "  chunking:",
+                "    chunk_size: 800",
+                "    chunk_overlap: 150",
+            ]),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(RetrievalConfigError, match="evidence_overlap_threshold"):
             load_retrieval_config(config_file)
 
     def test_missing_chunk_size_raises(self, tmp_path: Path) -> None:
@@ -153,6 +174,7 @@ class TestLoadRetrievalConfigErrors:
         config_file.write_text(
             "\n".join([
                 "retrieval:",
+                "  evidence_overlap_threshold: 0.5",
                 "  chunking:",
                 "    chunk_overlap: 150",
             ]),
@@ -167,6 +189,7 @@ class TestLoadRetrievalConfigErrors:
         config_file.write_text(
             "\n".join([
                 "retrieval:",
+                "  evidence_overlap_threshold: 0.5",
                 "  chunking:",
                 "    chunk_size: 800",
             ]),
