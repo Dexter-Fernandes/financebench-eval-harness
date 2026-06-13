@@ -501,6 +501,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="k value for hit@k retrieval signal (default: 5).",
     )
 
+    p_inspect_rag = subparsers.add_parser(
+        "inspect-rag",
+        help="Inspect one RAG result end-to-end for a single question.",
+    )
+    p_inspect_rag.add_argument(
+        "--run",
+        type=Path,
+        required=True,
+        metavar="RAG_RUN_DIR",
+        help="RAG run directory (contains rag_predictions.jsonl and scores.jsonl).",
+    )
+    p_inspect_rag.add_argument(
+        "--question-id",
+        required=True,
+        metavar="QUESTION_ID",
+        help="Question ID to inspect.",
+    )
+    p_inspect_rag.add_argument(
+        "--retrieval-run",
+        type=Path,
+        default=None,
+        metavar="RETRIEVAL_RUN_DIR",
+        help="Retrieval run directory for chunk text and gold evidence (optional; auto-resolved from metadata if omitted).",
+    )
+    p_inspect_rag.add_argument(
+        "--joined-dir",
+        type=Path,
+        default=None,
+        help="Analysis directory with joined_metrics.jsonl for failure labels (optional).",
+    )
+
     return parser
 
 
@@ -1108,6 +1139,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"  retrieval_miss_answer_wrong:   {summary['retrieval_miss_answer_wrong']}")
         print(f"Wrote joined metrics to {joined_path}")
         print(f"Wrote summary to {summary_path}")
+        return 0
+
+    if args.command == "inspect-rag":
+        from financebench_eval_harness.rag_inspect import (
+            RagInspectError,
+            format_rag_inspection,
+            load_rag_inspection,
+        )
+
+        try:
+            result = load_rag_inspection(
+                args.run,
+                args.question_id,
+                retrieval_run_dir=args.retrieval_run,
+                joined_dir=args.joined_dir,
+            )
+        except RagInspectError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(format_rag_inspection(result))
         return 0
 
     parser.error(f"Unknown command: {args.command}")
