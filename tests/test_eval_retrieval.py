@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from financebench_eval_harness.eval_retrieval import score_retrieval_run
+from financebench_eval_harness.eval_retrieval import generate_retrieval_report, score_retrieval_run
 from financebench_eval_harness.pipeline_config import PipelineConfig
 from financebench_eval_harness.chunking import ChunkingConfig
 from financebench_eval_harness.embedding import EmbeddingConfig
@@ -366,3 +366,52 @@ def test_score_retrieval_run_skips_questions_not_in_gold(tmp_path: Path) -> None
     summary = score_retrieval_run(cfg, run_dir)
 
     assert summary["example_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# M4.8 — generate_retrieval_report unit tests
+# ---------------------------------------------------------------------------
+
+
+def _make_summary(example_count: int = 1) -> dict:
+    return {
+        "example_count": example_count,
+        "doc_hit@5_rate": 1.0,
+        "page_hit@5_rate": 1.0,
+        "evidence_text_hit@5_rate": 1.0,
+        "doc_mrr@5": 1.0,
+        "doc_median_first_hit_rank": 1,
+    }
+
+
+def test_generate_retrieval_report_creates_file(tmp_path: Path) -> None:
+    cfg = _make_config(tmp_path)
+    report_dir = tmp_path / "reports"
+    report_path = generate_retrieval_report(_make_summary(), "run_001", cfg, output_dir=report_dir)
+    assert report_path.is_file()
+    assert report_path.name == "retrieval_eval_run_001.md"
+
+
+def test_generate_retrieval_report_contains_run_id(tmp_path: Path) -> None:
+    cfg = _make_config(tmp_path)
+    report_path = generate_retrieval_report(_make_summary(), "run_042", cfg, output_dir=tmp_path)
+    assert "run_042" in report_path.read_text()
+
+
+def test_generate_retrieval_report_contains_threshold(tmp_path: Path) -> None:
+    cfg = _make_config(tmp_path, evidence_overlap_threshold=0.7)
+    report_path = generate_retrieval_report(_make_summary(), "run_001", cfg, output_dir=tmp_path)
+    assert "0.7" in report_path.read_text()
+
+
+def test_generate_retrieval_report_contains_example_count(tmp_path: Path) -> None:
+    cfg = _make_config(tmp_path)
+    report_path = generate_retrieval_report(_make_summary(example_count=42), "run_001", cfg, output_dir=tmp_path)
+    assert "42" in report_path.read_text()
+
+
+def test_generate_retrieval_report_creates_output_dir(tmp_path: Path) -> None:
+    cfg = _make_config(tmp_path)
+    nested_dir = tmp_path / "a" / "b" / "c"
+    generate_retrieval_report(_make_summary(), "run_001", cfg, output_dir=nested_dir)
+    assert nested_dir.is_dir()

@@ -2102,3 +2102,134 @@ def test_retrieve_config_writes_config_yaml_to_run_dir(tmp_path: Path, capsys) -
 
     run_dirs = sorted(runs_dir.iterdir())
     assert (run_dirs[0] / "config.yaml").is_file()
+
+
+# ---------------------------------------------------------------------------
+# eval-retrieval command
+# ---------------------------------------------------------------------------
+
+_EVAL_GOLD_EXAMPLE = {
+    "question_id": "q001",
+    "company": "ACME",
+    "doc_name": "ACME_2022_10K",
+    "question": "What was capex?",
+    "gold_answer": "$50M",
+    "evidence": [
+        {
+            "doc_name": "ACME_2022_10K",
+            "gold_page_num": 5,
+            "matched_page_num": 5,
+            "evidence_text": "capital expenditures were fifty million dollars",
+            "page_text": "full page text here",
+        }
+    ],
+}
+
+_EVAL_RETRIEVAL_RESULT = {
+    "question_id": "q001",
+    "query": "What was capex?",
+    "retrieved": [
+        {
+            "rank": 1,
+            "chunk_id": "c1",
+            "doc_name": "ACME_2022_10K.pdf",
+            "page_num": 5,
+            "score": 0.9,
+            "text": "capital expenditures were fifty million dollars",
+        }
+    ],
+}
+
+
+def _setup_eval_retrieval(
+    tmp_path: Path,
+    *,
+    run_id: str = "run_001",
+    write_results: bool = True,
+) -> tuple[Path, Path, Path]:
+    """Create config, gold examples, and optionally a run dir with retrieval results.
+
+    Returns (config_path, run_dir, reports_dir).
+    """
+    questions_path = tmp_path / "examples.jsonl"
+    runs_dir = tmp_path / "runs"
+    config_path = tmp_path / "retrieval.yaml"
+    reports_dir = tmp_path / "reports"
+
+    _write_questions_jsonl(questions_path, [_EVAL_GOLD_EXAMPLE])
+    _write_pipeline_config(
+        config_path,
+        pages_path=tmp_path / "pages.jsonl",
+        chunks_path=tmp_path / "chunks.jsonl",
+        index_dir=tmp_path / "idx",
+        questions_path=questions_path,
+        runs_dir=runs_dir,
+    )
+
+    run_dir = runs_dir / run_id
+    run_dir.mkdir(parents=True)
+    if write_results:
+        _write_questions_jsonl(
+            run_dir / "retrieval_results.jsonl", [_EVAL_RETRIEVAL_RESULT]
+        )
+
+    return config_path, run_dir, reports_dir
+
+
+def test_eval_retrieval_exits_zero(tmp_path: Path, capsys) -> None:
+    config_path, _run_dir, reports_dir = _setup_eval_retrieval(tmp_path)
+
+    exit_code = main([
+        "eval-retrieval",
+        "--config", str(config_path),
+        "--run-id", "run_001",
+        "--report-dir", str(reports_dir),
+    ])
+
+    assert exit_code == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_eval_retrieval_fails_when_results_missing(tmp_path: Path, capsys) -> None:
+    config_path, _run_dir, reports_dir = _setup_eval_retrieval(tmp_path, write_results=False)
+
+    exit_code = main([
+        "eval-retrieval",
+        "--config", str(config_path),
+        "--run-id", "run_001",
+        "--report-dir", str(reports_dir),
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "not found" in captured.err
+
+
+def test_eval_retrieval_writes_markdown_report(tmp_path: Path, capsys) -> None:
+    config_path, _run_dir, reports_dir = _setup_eval_retrieval(tmp_path)
+
+    main([
+        "eval-retrieval",
+        "--config", str(config_path),
+        "--run-id", "run_001",
+        "--report-dir", str(reports_dir),
+    ])
+
+    assert (reports_dir / "retrieval_eval_run_001.md").is_file()
+
+
+def test_eval_retrieval_report_contains_key_metrics(tmp_path: Path, capsys) -> None:
+    config_path, _run_dir, reports_dir = _setup_eval_retrieval(tmp_path)
+
+    main([
+        "eval-retrieval",
+        "--config", str(config_path),
+        "--run-id", "run_001",
+        "--report-dir", str(reports_dir),
+    ])
+
+    content = (reports_dir / "retrieval_eval_run_001.md").read_text()
+    assert "run_001" in content
+    assert "example_count" in content
+    assert "doc_hit" in content
+    assert "top_k" in content

@@ -24,7 +24,7 @@ from financebench_eval_harness.retrieval_scoring import (
     summarize_rank_metrics,
 )
 
-__all__ = ["score_retrieval_run"]
+__all__ = ["score_retrieval_run", "generate_retrieval_report"]
 
 _DEFAULT_KS: tuple[int, ...] = (1, 5, 10, 20)
 
@@ -81,6 +81,53 @@ def score_retrieval_run(
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
+
+
+def generate_retrieval_report(
+    summary: dict,
+    run_id: str,
+    config: PipelineConfig,
+    *,
+    output_dir: Path,
+) -> Path:
+    """Write a markdown report for a retrieval evaluation run.
+
+    Returns the path to the written report.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    report_path = output_dir / f"retrieval_eval_{run_id}.md"
+    report_path.write_text(_render_retrieval_report(summary, run_id, config), encoding="utf-8")
+    return report_path
+
+
+def _render_retrieval_report(summary: dict, run_id: str, config: PipelineConfig) -> str:
+    lines: list[str] = [
+        f"# Retrieval Evaluation — {run_id}",
+        "",
+        "## Configuration",
+        "",
+        "| Setting | Value |",
+        "| --- | --- |",
+        f"| top_k | {config.top_k} |",
+        f"| evidence_overlap_threshold | {config.evidence_overlap_threshold} |",
+        f"| questions_path | {config.questions_path} |",
+        "",
+        "## Results",
+        "",
+        "| Metric | Value |",
+        "| --- | --- |",
+        f"| example_count | {summary.get('example_count', 0)} |",
+    ]
+    for key, value in summary.items():
+        if key == "example_count":
+            continue
+        if isinstance(value, float):
+            lines.append(f"| {key} | {value:.4f} |")
+        elif value is not None:
+            lines.append(f"| {key} | {value} |")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _load_retrieval_results(path: Path) -> dict[str, dict]:

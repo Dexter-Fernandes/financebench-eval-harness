@@ -61,6 +61,10 @@ from financebench_eval_harness.report import (
     BaselineReportError,
     generate_baseline_report,
 )
+from financebench_eval_harness.eval_retrieval import (
+    generate_retrieval_report,
+    score_retrieval_run,
+)
 
 
 DEFAULT_BASELINE_RUN_CONFIG_PATH = Path("configs/baseline_closed_book.yaml")
@@ -346,6 +350,31 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=300,
         help="Characters of chunk text to show per result (default: 300).",
+    )
+
+    p_eval = subparsers.add_parser(
+        "eval-retrieval",
+        help="Score a completed retrieval run and write a markdown report.",
+    )
+    p_eval.add_argument(
+        "--config",
+        type=Path,
+        default=Path("configs/retrieval.yaml"),
+        metavar="PATH",
+        help="Retrieval pipeline config YAML (default: configs/retrieval.yaml)",
+    )
+    p_eval.add_argument(
+        "--run-id",
+        required=True,
+        metavar="RUN_ID",
+        help="Run ID to evaluate (subdirectory of runs_dir, e.g. run_001)",
+    )
+    p_eval.add_argument(
+        "--report-dir",
+        type=Path,
+        default=Path("reports"),
+        metavar="DIR",
+        help="Directory to write the markdown report (default: reports/)",
     )
 
     return parser
@@ -841,6 +870,29 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(str(exc), file=sys.stderr)
             return 1
         print(format_inspection(inspection, preview_chars=args.preview_chars))
+        return 0
+
+    if args.command == "eval-retrieval":
+        try:
+            pipeline_cfg = load_pipeline_config(args.config)
+        except PipelineConfigError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        run_dir = pipeline_cfg.runs_dir / args.run_id
+        results_path = run_dir / "retrieval_results.jsonl"
+        if not results_path.is_file():
+            print(f"Retrieval results not found: {results_path}", file=sys.stderr)
+            return 1
+
+        summary = score_retrieval_run(pipeline_cfg, run_dir)
+
+        report_path = generate_retrieval_report(
+            summary, args.run_id, pipeline_cfg, output_dir=args.report_dir
+        )
+
+        print(f"Scored {summary['example_count']} questions.")
+        print(f"Retrieval report: {report_path}")
         return 0
 
     parser.error(f"Unknown command: {args.command}")
