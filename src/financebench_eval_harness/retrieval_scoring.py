@@ -1,4 +1,4 @@
-"""Retrieval evaluation scoring — M4.1/M4.3/M4.4.
+"""Retrieval evaluation scoring — M4.1/M4.3/M4.4/M4.5.
 
 Computes deterministic retrieval quality metrics directly from
 retrieval_results.jsonl paired with gold evidence from examples.jsonl.
@@ -18,6 +18,9 @@ to avoid false negatives from the known ±1 annotation offset present in Finance
 
 from __future__ import annotations
 
+import statistics
+from collections.abc import Callable
+
 from financebench_eval_harness.scoring import _normalize_text
 
 __all__ = [
@@ -28,12 +31,15 @@ __all__ = [
     "answerable_hit",
     "score_retrieval_result",
     "score_hit_at_k",
+    "score_rank_metrics",
     "summarize_retrieval_scores",
     "summarize_hit_at_k",
+    "summarize_rank_metrics",
 ]
 
 _SCORE_KEYS = ("doc_hit", "page_hit", "evidence_text_hit", "answerable_hit")
 _HIT_AT_K_METRICS = ("doc_hit", "page_hit", "evidence_text_hit")
+_RANK_METRICS = ("doc", "page", "evidence_text")
 _DEFAULT_KS: tuple[int, ...] = (1, 5, 10, 20)
 
 
@@ -236,4 +242,96 @@ def summarize_hit_at_k(
             count = sum(1 for s in scores if s.get(key) is True)
             summary[f"{key}_count"] = count
             summary[f"{key}_rate"] = count / n if n else 0.0
+    return summary
+
+
+# ---------------------------------------------------------------------------
+# Rank-based metrics — M4.5
+# ---------------------------------------------------------------------------
+
+
+def _first_matching_rank(
+    retrieved: list[dict],
+    is_match: Callable[[dict], bool],
+) -> int | None:
+    """Return chunk['rank'] of the first matching chunk (sorted by rank), or None."""
+    for chunk in sorted(retrieved, key=lambda c: c.get("rank", 0)):
+        if is_match(chunk):
+            return chunk["rank"]
+    return None
+
+
+def score_rank_metrics(
+    retrieval_result: dict,
+    gold_example: dict,
+    overlap_threshold: float = 0.5,
+) -> dict[str, int | None]:
+    """Compute first-hit rank for doc, page, and evidence_text for one question.
+
+    Returns {"doc_first_hit_rank": int|None, "page_first_hit_rank": int|None,
+             "evidence_text_first_hit_rank": int|None}.
+    None means no matching chunk was found anywhere in the retrieved list.
+    """
+    retrieved = retrieval_result.get("retrieved", [])
+    evidence = gold_example.get("evidence", [])
+
+    gold_docs = {normalize_doc_name(ev["doc_name"]) for ev in evidence}
+
+    gold_pages: set[tuple[str, int]] = set()
+    for ev in evidence:
+        doc = normalize_doc_name(ev["doc_name"])
+        for page in _page_candidates(ev):
+            gold_pages.add((doc, page))
+
+    gold_token_sets = [_word_tokens(ev["evidence_text"]) for ev in evidence]
+
+    def _doc_match(chunk: dict) -> bool:
+        return normalize_doc_name(chunk["doc_name"]) in gold_docs
+
+    def _page_match(chunk: dict) -> bool:
+        return (normalize_doc_name(chunk["doc_name"]), chunk["page_num"]) in gold_pages
+
+    def _text_match(chunk: dict) -> bool:
+        tokens = _word_tokens(chunk.get("text", ""))
+        return any(_jaccard(tokens, g) >= overlap_threshold for g in gold_token_sets)
+
+    return {
+        "doc_first_hit_rank": _first_matching_rank(retrieved, _doc_match),
+        "page_first_hit_rank": _first_matching_rank(retrieved, _page_match),
+        "evidence_text_first_hit_rank": _first_matching_rank(retrieved, _text_match),
+    }
+
+
+def summarize_rank_metrics(
+    scores: list[dict],
+    ks: tuple[int, ...] = _DEFAULT_KS,
+) -> dict[str, object]:
+    """Aggregate per-question rank scores into MRR@k and median first-hit rank.
+
+    MRR@k = mean(1/rank if rank <= k else 0) across all questions.
+    Missing hits (None) count as 0 for MRR.
+    median_first_hit_rank uses statistics.median over non-None ranks; None if all misses.
+    """
+    n = len(scores)
+    summary: dict[str, object] = {"example_count": n}
+
+    for metric in _RANK_METRICS:
+        rank_key = f"{metric}_first_hit_rank"
+        ranks: list[int] = []
+        for s in scores:
+            r = s.get(rank_key)
+            if r is not None:
+                ranks.append(r)
+
+        for k in ks:
+            rr_values = [
+                (1.0 / s[rank_key]) if (s.get(rank_key) is not None and s[rank_key] <= k) else 0.0
+                for s in scores
+            ]
+            summary[f"{metric}_mrr@{k}"] = sum(rr_values) / n if n else 0.0
+
+        summary[f"{metric}_median_first_hit_rank"] = (
+            statistics.median(ranks) if ranks else None
+        )
+
     return summary

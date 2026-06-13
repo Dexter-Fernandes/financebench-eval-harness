@@ -1,6 +1,8 @@
-"""Tests for retrieval_scoring.py — M4.1/M4.3 retrieval evaluation targets."""
+"""Tests for retrieval_scoring.py — M4.1/M4.3/M4.4/M4.5 retrieval evaluation targets."""
 
 from __future__ import annotations
+
+import pytest
 
 from financebench_eval_harness.retrieval_scoring import (
     answerable_hit,
@@ -9,8 +11,10 @@ from financebench_eval_harness.retrieval_scoring import (
     normalize_doc_name,
     page_hit,
     score_hit_at_k,
+    score_rank_metrics,
     score_retrieval_result,
     summarize_hit_at_k,
+    summarize_rank_metrics,
     summarize_retrieval_scores,
 )
 
@@ -400,3 +404,156 @@ def test_summarize_hit_at_k_empty_list() -> None:
     summary = summarize_hit_at_k([], ks=(1, 5, 10, 20))
     assert summary["example_count"] == 0
     assert summary["doc_hit@1_rate"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# M4.5 — Rank-based metrics shared fixture
+# ---------------------------------------------------------------------------
+
+# Correct chunk at rank 4; ranks 1-3 are wrong doc.
+_RESULT_HIT_AT_RANK_4 = {
+    "retrieved": [
+        {"rank": i, "doc_name": "AMAZON_2019_10K.pdf", "page_num": i, "score": 0.9 - i * 0.05, "text": "unrelated"}
+        for i in range(1, 4)
+    ] + [
+        {"rank": 4, "doc_name": "3M_2018_10K.pdf", "page_num": 60, "score": 0.5,
+         "text": "Purchases of property plant and equipment 1577"}
+    ]
+}
+
+_GOLD_3M_RANK = {
+    "evidence": [
+        {
+            "doc_name": "3M_2018_10K",
+            "gold_page_num": 59,
+            "matched_page_num": 60,
+            "evidence_text": "purchases of property plant and equipment 1577",
+        }
+    ]
+}
+
+# ---------------------------------------------------------------------------
+# M4.5 — Slice 1: score_rank_metrics doc_first_hit_rank
+# ---------------------------------------------------------------------------
+
+
+def test_score_rank_metrics_returns_three_keys() -> None:
+    result = score_rank_metrics(_RESULT_HIT_AT_RANK_4, _GOLD_3M_RANK)
+    assert set(result.keys()) == {
+        "doc_first_hit_rank", "page_first_hit_rank", "evidence_text_first_hit_rank"
+    }
+
+
+def test_score_rank_metrics_doc_first_hit_rank_correct() -> None:
+    result = score_rank_metrics(_RESULT_HIT_AT_RANK_4, _GOLD_3M_RANK)
+    assert result["doc_first_hit_rank"] == 4
+
+
+# ---------------------------------------------------------------------------
+# M4.5 — Slice 2: None when no hit
+# ---------------------------------------------------------------------------
+
+
+def test_score_rank_metrics_returns_none_when_no_doc_match() -> None:
+    result_no_hit = {
+        "retrieved": [
+            {"rank": 1, "doc_name": "AMAZON_2019_10K.pdf", "page_num": 1, "score": 0.9, "text": "unrelated"},
+        ]
+    }
+    result = score_rank_metrics(result_no_hit, _GOLD_3M_RANK)
+    assert result["doc_first_hit_rank"] is None
+    assert result["page_first_hit_rank"] is None
+    assert result["evidence_text_first_hit_rank"] is None
+
+
+def test_score_rank_metrics_returns_none_on_empty_retrieved() -> None:
+    result = score_rank_metrics({"retrieved": []}, _GOLD_3M_RANK)
+    assert result["doc_first_hit_rank"] is None
+
+
+# ---------------------------------------------------------------------------
+# M4.5 — Slice 3: page_first_hit_rank uses _page_candidates (matched_page_num)
+# ---------------------------------------------------------------------------
+
+
+def test_score_rank_metrics_page_first_hit_rank_uses_matched_page_num() -> None:
+    # gold_page_num=59, matched_page_num=60; chunk has page_num=60 at rank 4
+    result = score_rank_metrics(_RESULT_HIT_AT_RANK_4, _GOLD_3M_RANK)
+    assert result["page_first_hit_rank"] == 4
+
+
+def test_score_rank_metrics_page_hit_rank_none_when_page_wrong() -> None:
+    result_wrong_page = {
+        "retrieved": [
+            {"rank": 1, "doc_name": "3M_2018_10K.pdf", "page_num": 99, "score": 0.9, "text": ""}
+        ]
+    }
+    result = score_rank_metrics(result_wrong_page, _GOLD_3M_RANK)
+    assert result["page_first_hit_rank"] is None
+
+
+# ---------------------------------------------------------------------------
+# M4.5 — Slice 4: summarize_rank_metrics MRR@k
+# ---------------------------------------------------------------------------
+
+
+def test_summarize_rank_metrics_mrr_with_hit_at_rank_4_and_miss() -> None:
+    # Question 1: doc hit at rank 4. Question 2: miss.
+    # MRR@5 = (1/4 + 0) / 2 = 0.125
+    scores = [
+        {"doc_first_hit_rank": 4, "page_first_hit_rank": 4, "evidence_text_first_hit_rank": None},
+        {"doc_first_hit_rank": None, "page_first_hit_rank": None, "evidence_text_first_hit_rank": None},
+    ]
+    summary = summarize_rank_metrics(scores, ks=(5,))
+    assert summary["example_count"] == 2
+    assert summary["doc_mrr@5"] == pytest.approx(0.125)
+
+
+def test_summarize_rank_metrics_mrr_excludes_hit_beyond_k() -> None:
+    # Hit at rank 7, k=5: reciprocal rank = 0
+    scores = [{"doc_first_hit_rank": 7, "page_first_hit_rank": None, "evidence_text_first_hit_rank": None}]
+    summary = summarize_rank_metrics(scores, ks=(5,))
+    assert summary["doc_mrr@5"] == pytest.approx(0.0)
+
+
+def test_summarize_rank_metrics_mrr_two_hits() -> None:
+    # Rank 4 and rank 2: MRR@5 = (0.25 + 0.5) / 2 = 0.375
+    scores = [
+        {"doc_first_hit_rank": 4, "page_first_hit_rank": None, "evidence_text_first_hit_rank": None},
+        {"doc_first_hit_rank": 2, "page_first_hit_rank": None, "evidence_text_first_hit_rank": None},
+    ]
+    summary = summarize_rank_metrics(scores, ks=(5,))
+    assert summary["doc_mrr@5"] == pytest.approx(0.375)
+
+
+def test_summarize_rank_metrics_empty_list() -> None:
+    summary = summarize_rank_metrics([], ks=(5, 10))
+    assert summary["example_count"] == 0
+    assert summary["doc_mrr@5"] == pytest.approx(0.0)
+    assert summary["doc_median_first_hit_rank"] is None
+
+
+# ---------------------------------------------------------------------------
+# M4.5 — Slice 5: median_first_hit_rank
+# ---------------------------------------------------------------------------
+
+
+def test_summarize_rank_metrics_median_two_hits() -> None:
+    scores = [
+        {"doc_first_hit_rank": 3, "page_first_hit_rank": None, "evidence_text_first_hit_rank": None},
+        {"doc_first_hit_rank": 7, "page_first_hit_rank": None, "evidence_text_first_hit_rank": None},
+    ]
+    summary = summarize_rank_metrics(scores, ks=(10,))
+    assert summary["doc_median_first_hit_rank"] == pytest.approx(5.0)
+
+
+def test_summarize_rank_metrics_median_all_misses_is_none() -> None:
+    scores = [{"doc_first_hit_rank": None, "page_first_hit_rank": None, "evidence_text_first_hit_rank": None}]
+    summary = summarize_rank_metrics(scores, ks=(10,))
+    assert summary["doc_median_first_hit_rank"] is None
+
+
+def test_summarize_rank_metrics_median_single_hit() -> None:
+    scores = [{"doc_first_hit_rank": 1, "page_first_hit_rank": None, "evidence_text_first_hit_rank": None}]
+    summary = summarize_rank_metrics(scores, ks=(5,))
+    assert summary["doc_median_first_hit_rank"] == pytest.approx(1.0)
