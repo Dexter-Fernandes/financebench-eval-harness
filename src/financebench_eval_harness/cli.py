@@ -66,6 +66,12 @@ from financebench_eval_harness.eval_retrieval import (
     generate_retrieval_report,
     score_retrieval_run,
 )
+from financebench_eval_harness.rag_run import RAGRunError, run_rag_from_config
+from financebench_eval_harness.rag_run_config import (
+    DEFAULT_RAG_RUN_CONFIG_PATH,
+    RAGRunConfigError,
+    load_rag_run_config,
+)
 
 
 DEFAULT_BASELINE_RUN_CONFIG_PATH = Path("configs/baseline_closed_book.yaml")
@@ -376,6 +382,28 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("reports"),
         metavar="DIR",
         help="Directory to write the markdown report (default: reports/)",
+    )
+
+    run_rag_parser = subparsers.add_parser(
+        "run-rag",
+        help="Generate RAG answers from retrieved chunks.",
+    )
+    run_rag_parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_RAG_RUN_CONFIG_PATH,
+        help="RAG run config YAML path.",
+    )
+    run_rag_parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional deterministic run directory name.",
+    )
+    run_rag_parser.add_argument(
+        "--limit",
+        type=_positive_int,
+        default=None,
+        help="Limit number of examples for smoke tests.",
     )
 
     p_inspect_failure = subparsers.add_parser(
@@ -939,6 +967,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(report)
         return 0
 
+    if args.command == "run-rag":
+        try:
+            result = _run_configured_rag_evaluation(
+                config_path=args.config,
+                run_id=args.run_id,
+                limit=args.limit,
+            )
+        except (RAGRunConfigError, RAGRunError, LLMConfigError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        print(f"RAG run output: {result.output_dir}")
+        print(f"Wrote config snapshot to {result.config_path}")
+        print(f"Wrote {result.example_count} predictions to {result.predictions_path}")
+        print(f"Wrote {result.example_count} score rows to {result.scores_path}")
+        print(f"Wrote run metadata to {result.run_metadata_path}")
+        print(f"Attempted: {result.attempted_count}")
+        print(f"Succeeded: {result.success_count}")
+        print(f"Errors: {result.error_count}")
+        return 0
+
     parser.error(f"Unknown command: {args.command}")
     return 2
 
@@ -984,6 +1033,46 @@ def _run_configured_evaluation(
         judge_client=judge_client,
         run_id=run_id,
     )
+
+
+def _run_configured_rag_evaluation(
+    *,
+    config_path: Path,
+    run_id: str | None,
+    limit: int | None,
+):
+    rag_config = load_rag_run_config(config_path)
+    effective_limit = limit if limit is not None else 1000
+    llm_client = _build_rag_llm_client(rag_config, limit=effective_limit)
+    judge_client = _build_rag_judge_client(rag_config, limit=effective_limit)
+    return run_rag_from_config(
+        rag_config,
+        llm_client,
+        judge_client=judge_client,
+        run_id=run_id,
+        limit=limit,
+    )
+
+
+def _build_rag_llm_client(config, *, limit: int) -> LLMClient:
+    if config.model.provider == "mock":
+        return MockLLMClient(config.model, responses=["mock response"] * limit)
+    if config.model.provider == "ollama":
+        return OllamaLLMClient(config.model)
+    raise LLMConfigError(f"Unsupported LLM provider: {config.model.provider}")
+
+
+def _build_rag_judge_client(config, *, limit: int) -> LLMClient | None:
+    if config.judge is None:
+        return None
+    if config.judge.model.provider == "mock":
+        return MockLLMClient(
+            config.judge.model,
+            responses=['{"verdict": "incorrect", "reason": "Mock judge response."}'] * limit,
+        )
+    if config.judge.model.provider == "ollama":
+        return OllamaLLMClient(config.judge.model)
+    raise LLMConfigError(f"Unsupported judge LLM provider: {config.judge.model.provider}")
 
 
 def _record_report_path(run_metadata_path: Path, report_path: Path) -> None:

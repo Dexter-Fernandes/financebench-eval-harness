@@ -2322,3 +2322,75 @@ def test_inspect_retrieval_failure_stdout_contains_per_chunk_overlap(tmp_path: P
     config_path, question_id = _setup_inspect_failure(tmp_path)
     main(_inspect_failure_cmd(config_path, question_id))
     assert "Evidence overlap" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# run-rag command
+# ---------------------------------------------------------------------------
+
+
+def _write_rag_config(tmp_path: Path) -> tuple[Path, Path]:
+    """Write minimal examples.jsonl, retrieval.jsonl, and rag config. Return (config_path, output_dir)."""
+    examples_path = tmp_path / "examples.jsonl"
+    retrieval_path = tmp_path / "retrieval.jsonl"
+    examples_path.write_text(
+        json.dumps({"question_id": "q1", "question": "What is revenue?", "gold_answer": "$123.00", "evidence": []})
+        + "\n",
+        encoding="utf-8",
+    )
+    retrieval_path.write_text(
+        json.dumps({"question_id": "q1", "retrieved": [{"rank": 1, "chunk_id": "c01", "doc_name": "d.pdf", "page_num": 1, "text": "Revenue was $123."}]})
+        + "\n",
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "runs"
+    config_path = tmp_path / "rag.yaml"
+    config_path.write_text(
+        "\n".join([
+            "rag_eval:",
+            f"  examples_path: {examples_path}",
+            f"  retrieval_results_path: {retrieval_path}",
+            f"  output_dir: {output_dir}",
+            "  mode: rag_dense",
+            "  top_k: 3",
+            "model:",
+            "  provider: mock",
+            "  model_name: mock-llm",
+            "  temperature: 0.0",
+            "  max_tokens: 512",
+            "  timeout_seconds: 30",
+            "judge:",
+            "  enabled: false",
+            "  provider: mock",
+            "  model_name: mock-judge",
+            "  temperature: 0.0",
+            "  max_tokens: 256",
+            "  timeout_seconds: 30",
+            "  prompt:",
+            "    id: answer_correctness_v1",
+            "    version: v1",
+            "    template_path: prompts/judges/answer_correctness_v1.txt",
+        ]),
+        encoding="utf-8",
+    )
+    return config_path, output_dir
+
+
+def test_run_rag_command_exits_zero(tmp_path: Path, capsys) -> None:
+    config_path, _ = _write_rag_config(tmp_path)
+    exit_code = main(["run-rag", "--config", str(config_path), "--run-id", "rag-test"])
+    assert exit_code == 0
+
+
+def test_run_rag_command_writes_predictions(tmp_path: Path, capsys) -> None:
+    config_path, output_dir = _write_rag_config(tmp_path)
+    main(["run-rag", "--config", str(config_path), "--run-id", "rag-test"])
+    assert (output_dir / "rag-test" / "predictions.jsonl").exists()
+
+
+def test_run_rag_command_limit_flag_slices_examples(tmp_path: Path, capsys) -> None:
+    config_path, _ = _write_rag_config(tmp_path)
+    exit_code = main(["run-rag", "--config", str(config_path), "--run-id", "rag-test", "--limit", "1"])
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Attempted: 1" in captured.out
