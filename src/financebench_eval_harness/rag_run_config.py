@@ -32,6 +32,7 @@ class RAGEvalSettings:
     output_dir: Path
     mode: EvaluationMode
     top_k: int
+    retrieval_run_id: str | None = None
     max_context_chars: int | None = None
     eval_config_path: Path = Path("configs/evaluation/rag_modes.yaml")
 
@@ -53,6 +54,8 @@ class RAGRunConfig:
             "top_k": self.settings.top_k,
             "eval_config_path": str(self.settings.eval_config_path),
         }
+        if self.settings.retrieval_run_id is not None:
+            rag_eval["retrieval_run_id"] = self.settings.retrieval_run_id
         if self.settings.max_context_chars is not None:
             rag_eval["max_context_chars"] = self.settings.max_context_chars
 
@@ -121,6 +124,7 @@ def load_rag_run_config(
             output_dir=_path_from_mapping(rag_eval, "output_dir"),
             mode=_mode_from_mapping(rag_eval),
             top_k=_positive_int_from_mapping(rag_eval, "top_k"),
+            retrieval_run_id=_optional_string_from_mapping(rag_eval, "retrieval_run_id"),
             max_context_chars=_optional_positive_int_from_mapping(rag_eval, "max_context_chars"),
             eval_config_path=Path(
                 rag_eval.get("eval_config_path", "configs/evaluation/rag_modes.yaml")

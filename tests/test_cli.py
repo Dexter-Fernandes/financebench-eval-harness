@@ -2385,7 +2385,7 @@ def test_run_rag_command_exits_zero(tmp_path: Path, capsys) -> None:
 def test_run_rag_command_writes_predictions(tmp_path: Path, capsys) -> None:
     config_path, output_dir = _write_rag_config(tmp_path)
     main(["run-rag", "--config", str(config_path), "--run-id", "rag-test"])
-    assert (output_dir / "rag-test" / "predictions.jsonl").exists()
+    assert (output_dir / "rag-test" / "rag_predictions.jsonl").exists()
 
 
 def test_run_rag_command_limit_flag_slices_examples(tmp_path: Path, capsys) -> None:

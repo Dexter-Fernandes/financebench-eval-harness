@@ -323,3 +323,40 @@ def test_judge_section_disabled_gives_none(tmp_path: Path) -> None:
     _write_yaml(cfg_path, d)
     result = load_rag_run_config(cfg_path)
     assert result.judge is None
+
+
+# ---------------------------------------------------------------------------
+# Cycles 14-15 — retrieval_run_id optional field (M5.7)
+# ---------------------------------------------------------------------------
+
+
+def test_retrieval_run_id_parsed_when_present(tmp_path: Path) -> None:
+    d = _minimal_yaml_dict()
+    d["rag_eval"]["retrieval_run_id"] = "run_2026_dense"
+    cfg_path = tmp_path / "config.yaml"
+    _write_yaml(cfg_path, d)
+    result = load_rag_run_config(cfg_path)
+    assert result.settings.retrieval_run_id == "run_2026_dense"
+
+
+def test_retrieval_run_id_defaults_to_none_when_absent(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "config.yaml"
+    _write_yaml(cfg_path, _minimal_yaml_dict())
+    result = load_rag_run_config(cfg_path)
+    assert result.settings.retrieval_run_id is None
+
+
+def test_to_dict_includes_retrieval_run_id_when_set(tmp_path: Path) -> None:
+    d = _minimal_yaml_dict()
+    d["rag_eval"]["retrieval_run_id"] = "run_test"
+    cfg_path = tmp_path / "config.yaml"
+    _write_yaml(cfg_path, d)
+    result = load_rag_run_config(cfg_path)
+    assert result.to_dict()["rag_eval"]["retrieval_run_id"] == "run_test"
+
+
+def test_to_dict_omits_retrieval_run_id_when_none(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "config.yaml"
+    _write_yaml(cfg_path, _minimal_yaml_dict())
+    result = load_rag_run_config(cfg_path)
+    assert "retrieval_run_id" not in result.to_dict()["rag_eval"]

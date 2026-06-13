@@ -1,4 +1,4 @@
-"""M5.6 — RAG answer runner (TDD)."""
+"""M5.6–M5.7 — RAG answer runner (TDD)."""
 from __future__ import annotations
 
 import json
@@ -91,6 +91,7 @@ def _make_config(
     top_k: int = 3,
     max_context_chars: int | None = None,
     mode: EvaluationMode = EvaluationMode.RAG_DENSE,
+    retrieval_run_id: str | None = "test-retrieval-run",
 ) -> RAGRunConfig:
     examples_path = tmp_path / "examples.jsonl"
     retrieval_path = tmp_path / "retrieval.jsonl"
@@ -103,6 +104,7 @@ def _make_config(
             output_dir=tmp_path / "runs",
             mode=mode,
             top_k=top_k,
+            retrieval_run_id=retrieval_run_id,
             max_context_chars=max_context_chars,
             eval_config_path=_EVAL_CONFIG_PATH,
         ),
@@ -169,11 +171,11 @@ def test_prediction_row_has_standard_fields(tmp_path: Path) -> None:
     assert row["gold_answer"] == "$10 million"
     assert row["prediction"] == "$10 million"
     assert row["mode"] == "rag_dense"
+    assert row["model"] == "mock-llm"
     assert row["model_provider"] == "mock"
     assert row["model_name"] == "mock-llm"
     assert "prompt_id" in row
     assert "prompt_version" in row
-    assert "prompt" in row
     assert "latency_ms" in row
     assert row["status"] == "success"
     assert row["error"] is None
@@ -185,7 +187,7 @@ def test_prediction_row_has_standard_fields(tmp_path: Path) -> None:
 
 
 def test_prediction_row_has_rag_fields(tmp_path: Path) -> None:
-    config = _make_config(tmp_path, top_k=3)
+    config = _make_config(tmp_path, top_k=3, retrieval_run_id="run_test")
     result = run_rag_from_config(config, _mock_client(config), run_id="test-run")
     rows = [
         json.loads(line)
@@ -194,8 +196,9 @@ def test_prediction_row_has_rag_fields(tmp_path: Path) -> None:
     ]
     row = rows[0]
     assert row["top_k"] == 3
-    assert isinstance(row["retrieved_chunk_ids"], list)
-    assert "doc_p1_c01" in row["retrieved_chunk_ids"]
+    assert isinstance(row["context_chunk_ids"], list)
+    assert "doc_p1_c01" in row["context_chunk_ids"]
+    assert row["retrieval_run_id"] == "run_test"
 
 
 # ---------------------------------------------------------------------------
@@ -324,4 +327,44 @@ def test_top_k_slices_retrieved_context(tmp_path: Path) -> None:
         if line.strip()
     ]
     row_q001 = next(r for r in rows if r["question_id"] == "q001")
-    assert row_q001["retrieved_chunk_ids"] == ["doc_p1_c01"]
+    assert row_q001["context_chunk_ids"] == ["doc_p1_c01"]
+
+
+# ---------------------------------------------------------------------------
+# Cycle 12 — output files use rag_ prefix (M5.7)
+# ---------------------------------------------------------------------------
+
+
+def test_output_files_use_rag_prefix(tmp_path: Path) -> None:
+    config = _make_config(tmp_path)
+    result = run_rag_from_config(config, _mock_client(config), run_id="test-run")
+    assert result.predictions_path.name == "rag_predictions.jsonl"
+    assert result.run_metadata_path.name == "rag_run_metadata.json"
+
+
+# ---------------------------------------------------------------------------
+# Cycle 13 — run_metadata includes retrieval_run_id (M5.7)
+# ---------------------------------------------------------------------------
+
+
+def test_run_metadata_includes_retrieval_run_id(tmp_path: Path) -> None:
+    config = _make_config(tmp_path, retrieval_run_id="run_abc")
+    result = run_rag_from_config(config, _mock_client(config), run_id="test-run")
+    metadata = json.loads(result.run_metadata_path.read_text(encoding="utf-8"))
+    assert metadata["retrieval_run_id"] == "run_abc"
+
+
+# ---------------------------------------------------------------------------
+# Cycle 14 — retrieval_run_id=None propagates to prediction row (M5.7)
+# ---------------------------------------------------------------------------
+
+
+def test_prediction_row_retrieval_run_id_none_when_unset(tmp_path: Path) -> None:
+    config = _make_config(tmp_path, retrieval_run_id=None)
+    result = run_rag_from_config(config, _mock_client(config), run_id="test-run")
+    rows = [
+        json.loads(line)
+        for line in result.predictions_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert rows[0]["retrieval_run_id"] is None

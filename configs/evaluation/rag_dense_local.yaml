@@ -1,6 +1,7 @@
 rag_eval:
   examples_path: data/processed/financebench/examples.jsonl
   retrieval_results_path: runs/run_004/retrieval_results.jsonl
+  retrieval_run_id: run_004
   output_dir: runs
   mode: rag_dense
   top_k: 5

@@ -69,9 +69,9 @@ def run_rag_from_config(
         encoding="utf-8",
     )
 
-    predictions_path = output_dir / "predictions.jsonl"
+    predictions_path = output_dir / "rag_predictions.jsonl"
     scores_path = output_dir / "scores.jsonl"
-    run_metadata_path = output_dir / "run_metadata.json"
+    run_metadata_path = output_dir / "rag_run_metadata.json"
     judge_failures_path = output_dir / "judge_failures.jsonl"
 
     eval_config = load_evaluation_config(
@@ -150,20 +150,21 @@ def run_rag_from_config(
                         "prompt_version": judge_row["prompt_version"],
                     })
 
-            retrieved_chunk_ids = [c.chunk_id for c in used_chunks]
+            context_chunk_ids = [c.chunk_id for c in used_chunks]
             prediction_row: dict[str, object] = {
                 "question_id": rag_input.question_id,
                 "question": rag_input.question,
                 "gold_answer": rag_input.gold_answer,
                 "prediction": prediction,
                 "mode": rendered_prompt.mode.value,
+                "model": config.model.model_name,
                 "model_provider": config.model.provider,
                 "model_name": config.model.model_name,
-                "prompt_id": rendered_prompt.prompt_id,
                 "prompt_version": rendered_prompt.prompt_version,
-                "prompt": rendered_prompt.text,
+                "prompt_id": rendered_prompt.prompt_id,
+                "retrieval_run_id": config.settings.retrieval_run_id,
                 "top_k": top_k,
-                "retrieved_chunk_ids": retrieved_chunk_ids,
+                "context_chunk_ids": context_chunk_ids,
                 "latency_ms": latency_ms,
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
@@ -197,6 +198,7 @@ def run_rag_from_config(
         "output_dir": str(output_dir),
         "examples_path": str(config.settings.examples_path),
         "retrieval_results_path": str(config.settings.retrieval_results_path),
+        "retrieval_run_id": config.settings.retrieval_run_id,
         "mode": config.settings.mode.value,
         "limit": limit,
         "top_k": top_k,
