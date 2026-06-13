@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from financebench_eval_harness.analysis import (
+    assign_failure_labels,
     categorize_join_row,
     join_retrieval_and_answer_scores,
     summarize_joined_metrics,
@@ -240,3 +241,224 @@ def test_cli_join_metrics_writes_output_files(tmp_path: Path) -> None:
     assert summary["example_count"] == 2
     assert summary["retrieval_hit_answer_correct"] == 1
     assert summary["retrieval_miss_answer_wrong"] == 1
+
+
+# ---------------------------------------------------------------------------
+# M5.12 — assign_failure_labels() unit cycles
+# ---------------------------------------------------------------------------
+
+
+def _label_row(
+    *,
+    page_hit: bool = True,
+    numeric_match: bool = True,
+    unit_match: bool = True,
+    gold_numeric_values: list | None = None,
+    judge_verdict: str | None = "correct",
+    judge_numeric_error: bool | None = None,
+    judge_unsupported_claims: bool | None = None,
+    k: int = 5,
+) -> dict:
+    return {
+        "retrieval": {f"page_hit@{k}": page_hit},
+        "answer": {
+            "numeric_match": numeric_match,
+            "unit_match": unit_match,
+            "gold_numeric_values": gold_numeric_values if gold_numeric_values is not None else [1.0],
+        },
+        "judge_verdict": judge_verdict,
+        "judge_numeric_error": judge_numeric_error,
+        "judge_unsupported_claims": judge_unsupported_claims,
+    }
+
+
+def test_assign_failure_labels_retrieval_miss() -> None:
+    row = _label_row(page_hit=False, numeric_match=False, unit_match=False, judge_verdict="incorrect")
+    assert "retrieval_miss" in assign_failure_labels(row)
+
+
+def test_assign_failure_labels_numeric_error_from_judge() -> None:
+    row = _label_row(judge_numeric_error=True, judge_verdict="incorrect", numeric_match=False, unit_match=False)
+    assert "numeric_error" in assign_failure_labels(row)
+
+
+def test_assign_failure_labels_numeric_error_heuristic() -> None:
+    row = _label_row(
+        numeric_match=False,
+        unit_match=False,
+        gold_numeric_values=[1577.0],
+        judge_numeric_error=None,
+        judge_verdict=None,
+    )
+    assert "numeric_error" in assign_failure_labels(row)
+
+
+def test_assign_failure_labels_no_numeric_error_when_no_gold_numbers() -> None:
+    row = _label_row(
+        numeric_match=False,
+        unit_match=False,
+        gold_numeric_values=[],
+        judge_numeric_error=None,
+        judge_verdict=None,
+    )
+    assert "numeric_error" not in assign_failure_labels(row)
+
+
+def test_assign_failure_labels_unsupported_claim() -> None:
+    row = _label_row(judge_unsupported_claims=True, judge_verdict="incorrect", numeric_match=False, unit_match=False)
+    assert "unsupported_claim" in assign_failure_labels(row)
+
+
+def test_assign_failure_labels_over_refusal() -> None:
+    row = _label_row(page_hit=True, judge_verdict="not_answered")
+    assert "over_refusal" in assign_failure_labels(row)
+
+
+def test_assign_failure_labels_no_over_refusal_on_retrieval_miss() -> None:
+    row = _label_row(page_hit=False, judge_verdict="not_answered", numeric_match=False, unit_match=False)
+    assert "over_refusal" not in assign_failure_labels(row)
+
+
+def test_assign_failure_labels_reasoning_error() -> None:
+    row = _label_row(
+        page_hit=True,
+        numeric_match=False,
+        unit_match=False,
+        gold_numeric_values=[],
+        judge_verdict="incorrect",
+        judge_numeric_error=None,
+        judge_unsupported_claims=None,
+    )
+    assert "reasoning_error" in assign_failure_labels(row)
+
+
+def test_assign_failure_labels_no_reasoning_error_when_numeric_error_present() -> None:
+    row = _label_row(
+        page_hit=True,
+        numeric_match=False,
+        unit_match=False,
+        judge_verdict="incorrect",
+        judge_numeric_error=True,
+    )
+    labels = assign_failure_labels(row)
+    assert "numeric_error" in labels
+    assert "reasoning_error" not in labels
+
+
+def test_assign_failure_labels_correct_gets_empty_list() -> None:
+    row = _label_row(page_hit=True, numeric_match=True, unit_match=True, judge_verdict="correct")
+    assert assign_failure_labels(row) == []
+
+
+def test_assign_failure_labels_multiple_labels() -> None:
+    row = _label_row(
+        page_hit=False,
+        numeric_match=False,
+        unit_match=False,
+        gold_numeric_values=[100.0],
+        judge_verdict="incorrect",
+        judge_numeric_error=None,
+    )
+    labels = assign_failure_labels(row)
+    assert "retrieval_miss" in labels
+    assert "numeric_error" in labels
+
+
+# ---------------------------------------------------------------------------
+# M5.12 — join row schema includes new fields
+# ---------------------------------------------------------------------------
+
+
+def test_join_row_includes_failure_labels_field() -> None:
+    retrieval = [_retrieval_row("q1", page_hit=True)]
+    answers = [_answer_row("q1", numeric_match=True)]
+
+    result = join_retrieval_and_answer_scores(retrieval, answers)
+
+    assert "failure_labels" in result[0]
+    assert isinstance(result[0]["failure_labels"], list)
+
+
+def test_join_row_includes_judge_numeric_error_and_unsupported_claims() -> None:
+    retrieval = [_retrieval_row("q1")]
+    answers = [_answer_row("q1")]
+
+    result = join_retrieval_and_answer_scores(retrieval, answers)
+    row = result[0]
+
+    assert "judge_numeric_error" in row
+    assert "judge_unsupported_claims" in row
+
+
+def test_join_row_answer_includes_gold_numeric_values() -> None:
+    retrieval = [_retrieval_row("q1")]
+    answers = [_answer_row("q1")]
+
+    result = join_retrieval_and_answer_scores(retrieval, answers)
+    answer = result[0]["answer"]
+
+    assert isinstance(answer, dict)
+    assert "gold_numeric_values" in answer
+
+
+# ---------------------------------------------------------------------------
+# M5.12 — summarize includes failure label counts
+# ---------------------------------------------------------------------------
+
+
+def test_summarize_includes_failure_label_counts() -> None:
+    rows = [
+        {"category": "retrieval_miss_answer_wrong", "failure_labels": ["retrieval_miss", "numeric_error"]},
+        {"category": "retrieval_hit_answer_correct", "failure_labels": []},
+        {"category": "retrieval_hit_answer_wrong", "failure_labels": ["reasoning_error"]},
+    ]
+
+    summary = summarize_joined_metrics(rows)
+
+    assert summary["retrieval_miss_count"] == 1
+    assert summary["numeric_error_count"] == 1
+    assert summary["reasoning_error_count"] == 1
+    assert summary["unsupported_claim_count"] == 0
+    assert summary["over_refusal_count"] == 0
+    assert summary["no_failure_label_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# M5.12 — CLI end-to-end includes failure_labels in output
+# ---------------------------------------------------------------------------
+
+
+def test_cli_join_metrics_output_includes_failure_labels(tmp_path: Path) -> None:
+    from financebench_eval_harness.cli import main
+
+    retrieval_scores_path = tmp_path / "retrieval_scores.jsonl"
+    answer_scores_path = tmp_path / "scores.jsonl"
+    output_dir = tmp_path / "analysis"
+
+    retrieval_scores_path.write_text(
+        json.dumps(_retrieval_row("q1", page_hit=True)) + "\n",
+        encoding="utf-8",
+    )
+    answer_scores_path.write_text(
+        json.dumps(_answer_row("q1", numeric_match=True)) + "\n",
+        encoding="utf-8",
+    )
+
+    exit_code = main([
+        "join-metrics",
+        "--retrieval-scores", str(retrieval_scores_path),
+        "--answer-scores", str(answer_scores_path),
+        "--output-dir", str(output_dir),
+    ])
+
+    assert exit_code == 0
+    rows = [
+        json.loads(line)
+        for line in (output_dir / "joined_metrics.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert "failure_labels" in rows[0]
+    assert isinstance(rows[0]["failure_labels"], list)
+
+    summary = json.loads((output_dir / "joined_summary.json").read_text(encoding="utf-8"))
+    assert "retrieval_miss_count" in summary
+    assert "no_failure_label_count" in summary
