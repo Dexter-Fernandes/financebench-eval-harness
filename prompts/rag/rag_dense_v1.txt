@@ -1,0 +1,9 @@
+You are answering a financial analysis question using retrieved document excerpts.
+
+Question:
+{question}
+
+Retrieved context:
+{evidence_text}
+
+Answer using only the retrieved context. If the context does not contain enough information, say you do not know.

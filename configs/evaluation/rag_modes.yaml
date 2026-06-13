@@ -1,0 +1,20 @@
+evaluation:
+  modes:
+    rag_dense:
+      context_source: retrieved_chunks
+      prompt:
+        id: rag_dense_v1
+        version: v1
+        template_path: prompts/rag/rag_dense_v1.txt
+    rag_oracle:
+      context_source: gold_evidence
+      prompt:
+        id: rag_oracle_v1
+        version: v1
+        template_path: prompts/rag/rag_oracle_v1.txt
+    rag_no_context:
+      context_source: none
+      prompt:
+        id: rag_no_context_v1
+        version: v1
+        template_path: prompts/rag/rag_no_context_v1.txt

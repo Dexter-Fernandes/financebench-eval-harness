@@ -13,10 +13,18 @@ REQUIRED_EVALUATION_MODES = {"closed_book", "oracle_context"}
 
 
 class EvaluationMode(str, Enum):
-    """Supported baseline evaluation modes."""
+    """Supported evaluation modes (baseline and RAG)."""
 
     CLOSED_BOOK = "closed_book"
     ORACLE_CONTEXT = "oracle_context"
+    RAG_DENSE = "rag_dense"
+    RAG_ORACLE = "rag_oracle"
+    RAG_NO_CONTEXT = "rag_no_context"
+    RAG_HYBRID = "rag_hybrid"
+    RAG_RERANKED = "rag_reranked"
+
+
+VALID_CONTEXT_SOURCES = frozenset({"retrieved_chunks", "gold_evidence", "none"})
 
 
 @dataclass(frozen=True)
@@ -28,6 +36,7 @@ class PromptTemplate:
     mode: EvaluationMode
     template_path: Path
     template: str
+    context_source: str = "none"  # "retrieved_chunks" | "gold_evidence" | "none"
 
 
 @dataclass(frozen=True)
@@ -72,6 +81,7 @@ class EvaluationConfigError(ValueError):
 
 def load_evaluation_config(
     config_path: str | Path = DEFAULT_EVALUATION_CONFIG_PATH,
+    required_modes: frozenset[str] | None = None,
 ) -> EvaluationConfig:
     path = Path(config_path)
 
@@ -100,7 +110,8 @@ def load_evaluation_config(
             f"Evaluation config must contain an 'evaluation.modes' mapping: {path}"
         )
 
-    missing_modes = sorted(REQUIRED_EVALUATION_MODES - modes.keys())
+    effective_required = REQUIRED_EVALUATION_MODES if required_modes is None else required_modes
+    missing_modes = sorted(effective_required - modes.keys())
     if missing_modes:
         missing = ", ".join(missing_modes)
         raise EvaluationConfigError(
@@ -128,7 +139,7 @@ def render_prompt(
     prompt_template = config.prompt_for(mode)
     clean_question = _required_text(question, "question")
     evidence_text = ""
-    if prompt_template.mode is EvaluationMode.ORACLE_CONTEXT:
+    if prompt_template.context_source in ("retrieved_chunks", "gold_evidence"):
         evidence_text = _joined_evidence_context(evidence_texts)
 
     text = prompt_template.template.format(
@@ -203,12 +214,20 @@ def _prompt_template_from_mapping(
             f"Evaluation prompt template file must be non-empty: {template_path}"
         )
 
+    context_source = raw_mode_config.get("context_source", "none")
+    if context_source not in VALID_CONTEXT_SOURCES:
+        raise EvaluationConfigError(
+            f"Evaluation mode config 'context_source' must be one of"
+            f" {sorted(VALID_CONTEXT_SOURCES)}: {mode}"
+        )
+
     return PromptTemplate(
         id=prompt_id,
         version=version,
         mode=evaluation_mode,
         template_path=template_path,
         template=template,
+        context_source=context_source,
     )
 
 
