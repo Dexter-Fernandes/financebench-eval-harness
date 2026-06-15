@@ -556,6 +556,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override run_dir from config (directory with rag_predictions.jsonl).",
     )
 
+    cmp_parser = subparsers.add_parser(
+        "compare-embeddings",
+        help="Run retrieval comparison across multiple embedding models (M6).",
+    )
+    cmp_parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("configs/embedding_comparison.yaml"),
+        help="Embedding comparison config YAML.",
+    )
+    cmp_parser.add_argument(
+        "--report-dir",
+        type=Path,
+        default=Path("reports"),
+        help="Directory for the generated Markdown report.",
+    )
+    cmp_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Validate config and list models without running embeddings.",
+    )
+
     return parser
 
 
@@ -1219,6 +1242,49 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"  combined scores:  {result.combined_scores_path}")
         return 0
 
+    if args.command == "compare-embeddings":
+        from financebench_eval_harness.embedding_comparison_config import (
+            EmbeddingComparisonConfigError,
+            load_embedding_comparison_config,
+        )
+        from financebench_eval_harness.embedding_comparison import run_embedding_comparison
+
+        try:
+            cmp_config = load_embedding_comparison_config(args.config)
+        except EmbeddingComparisonConfigError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        if args.dry_run:
+            print(f"[dry-run] {len(cmp_config.embedding_models)} models to compare:")
+            for spec in cmp_config.embedding_models:
+                print(f"  {spec.provider}/{spec.name} ({spec.category})")
+            print(f"[dry-run] Fixed chunks: {cmp_config.retrieval.chunks_path}")
+            print(f"[dry-run] top_k={cmp_config.retrieval.top_k}")
+            return 0
+
+        result = run_embedding_comparison(cmp_config)
+
+        print(f"Comparison run: {result.run_dir}")
+        print(f"Models succeeded: {result.succeeded_count}")
+        print(f"Models failed: {result.failed_count}")
+        if result.failed_models:
+            for name, err in result.failed_models.items():
+                print(f"  FAILED {name}: {err}", file=sys.stderr)
+
+        try:
+            from financebench_eval_harness.embedding_comparison_report import (
+                generate_embedding_comparison_report,
+            )
+            report_path = generate_embedding_comparison_report(
+                result.run_dir, output_dir=args.report_dir
+            )
+            print(f"Comparison report: {report_path}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: report generation failed: {exc}", file=sys.stderr)
+
+        return 0 if result.failed_count == 0 else 2
+
     parser.error(f"Unknown command: {args.command}")
     return 2
 
@@ -1402,6 +1468,9 @@ def _build_embedding_client(config: EmbeddingConfig):
         return MockEmbeddingClient(config)
     if config.provider == "ollama":
         return OllamaEmbeddingClient(config)
+    if config.provider == "sentence_transformers":
+        from financebench_eval_harness.embedding import SentenceTransformersEmbeddingClient
+        return SentenceTransformersEmbeddingClient(config)
     from financebench_eval_harness.embedding import EmbeddingProviderError
     raise EmbeddingProviderError(f"Unsupported embedding provider: {config.provider}")
 
