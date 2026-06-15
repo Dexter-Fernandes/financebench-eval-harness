@@ -2,17 +2,62 @@
 
 ## Current State
 
-- M5.1–M5.6 complete on `M5` branch (not merged to main).
-- 688 tests pass (2 Ollama skips).
-- Full pipeline operational: `build-index → retrieve → run-rag`.
+- M5 complete and merged to main (PR #5).
+- 784 tests pass, 2 skipped (Ollama integration tests).
+- Full pipeline operational: `build-index → retrieve → run-rag → score-rag → join-metrics → report-rag`
 - First retrieval baseline (run_004, nomic-embed-text, chunk_size=800, top_k=5):
   - `doc_hit@5 = 23.9%`, `page_hit@5 = 0%`, `evidence_text_hit@5 = 0%`
 
 ## Current Engineering Milestone
 
-**M5.7 next: RAG scoring and markdown report**
+**M6 next: Embedding model comparison**
 
-A `score-rag` command that reads `predictions.jsonl` and produces answer correctness + grounding scores plus a markdown report.
+Goal: identify which embedding model gives the best retrieval quality for FinanceBench
+by running the full retrieval pipeline with multiple models under identical settings
+and comparing hit@k metrics.
+
+**Final deliverable:**
+```bash
+python -m financebench_eval compare-embeddings \
+  --config configs/embedding_comparison.yaml
+```
+
+Output layout:
+```
+runs/<comparison_run_id>/
+  config.yaml
+  model_runs/
+    text-embedding-3-small/
+      retrieval_results.jsonl · retrieval_scores.jsonl · retrieval_summary.json
+    text-embedding-3-large/
+      retrieval_results.jsonl · retrieval_scores.jsonl · retrieval_summary.json
+    bge-m3/
+      retrieval_results.jsonl · retrieval_scores.jsonl · retrieval_summary.json
+  embedding_leaderboard.csv
+  embedding_leaderboard.json
+  embedding_decision.json
+
+reports/
+  embedding_comparison_<run_id>.md
+```
+
+**Sub-milestones:**
+
+| ID | Description |
+|---|---|
+| M6.1 | Define embedding comparison goals |
+| M6.2 | Define candidate embedding models |
+| M6.3 | Extend embedding config schema |
+| M6.4 | Add embedding cache |
+| M6.5 | Build separate index per embedding model |
+| M6.6 | Add batch embedding comparison runner |
+| M6.7 | Validate fixed retrieval settings |
+| M6.8 | Compute retrieval leaderboard |
+| M6.9 | Track cost, latency, and index size |
+| M6.10 | Add model decision framework |
+| M6.11 | Add optional end-to-end RAG comparison |
+| M6.12 | Generate embedding comparison report |
+| M6.13 | Add embedding comparison tests |
 
 ---
 
@@ -197,12 +242,33 @@ python -m financebench_eval_harness.cli eval-retrieval \
 
 # 4. Run RAG generation
 #    (update retrieval_results_path in rag_dense_local.yaml first)
-python -m financebench_eval_harness.cli run-rag \
-  --config configs/evaluation/rag_dense_local.yaml \
-  --run-id <rag_run_id> [--limit N]
+python -m financebench_eval run-rag \
+  --config configs/evaluation/rag_dense_local.yaml
 
-# 5. (Future: M5.7) Score RAG answers
-# python -m financebench_eval_harness.cli score-rag --run-id <rag_run_id>
+# 5. Score RAG answers with answer + grounding judges
+python -m financebench_eval score-rag \
+  --config configs/evaluation/rag_score_local.yaml \
+  --run-dir runs/<rag_run_id>
+
+# 6. Join retrieval + answer metrics
+python -m financebench_eval join-metrics \
+  --retrieval-scores runs/<retrieval_run_id>/retrieval_scores.jsonl \
+  --answer-scores    runs/<rag_run_id>/rag_combined_scores.jsonl \
+  --output-dir       runs/<rag_run_id>/joined --k 5
+
+# 7. Generate Markdown report
+python -m financebench_eval report-rag \
+  --joined-dir        runs/<rag_run_id>/joined \
+  --rag-run-dir       runs/<rag_run_id> \
+  --retrieval-summary runs/<retrieval_run_id>/retrieval_summary.json \
+  --run-id            <rag_run_id>
+
+# 8. (Optional) Single-question deep-dive
+python -m financebench_eval inspect-rag \
+  --run           runs/<rag_run_id> \
+  --question-id   <id> \
+  --retrieval-run runs/<retrieval_run_id> \
+  --joined-dir    runs/<rag_run_id>/joined
 ```
 
 ## Intended Build Path
