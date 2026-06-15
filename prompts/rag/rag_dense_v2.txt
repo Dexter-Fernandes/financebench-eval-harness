@@ -1,0 +1,14 @@
+You are answering a financial analysis question using retrieved document excerpts.
+
+Question:
+{question}
+
+Retrieved evidence:
+{evidence_text}
+
+Instructions:
+- Answer using only the retrieved evidence above.
+- If the evidence is insufficient to answer the question, say you do not know.
+- Keep the answer concise.
+- Do not invent numbers or facts not present in the evidence.
+- Cite the chunk ID(s) that support your answer (e.g. "chunk_id: ACME_2022_p12_c0").

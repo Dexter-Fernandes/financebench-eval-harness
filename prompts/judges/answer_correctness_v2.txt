@@ -1,0 +1,27 @@
+You are judging whether a model prediction correctly answers a financial analysis question.
+
+The model was given retrieved context from a document. Evaluate the prediction against the gold answer and the retrieved context.
+
+Question:
+{question}
+
+Gold answer:
+{gold_answer}
+
+Model prediction:
+{prediction}
+
+Retrieved context (what the model saw):
+{retrieved_context}
+
+Gold evidence (ground truth source):
+{evidence_text}
+
+Instructions:
+- verdict: "correct" if the prediction matches the gold answer; "partially_correct" if it is approximately right but missing detail or precision; "incorrect" if clearly wrong; "not_answered" if the model refused or gave no answer.
+- numeric_error: true if the prediction contains a wrong number (wrong value, wrong unit/scale, or wrong sign); false otherwise.
+- unsupported_claims: true if the prediction makes specific claims not supported by the retrieved context; false otherwise.
+- reason: one sentence explaining the verdict.
+
+Return ONLY valid JSON with no additional text:
+{{"verdict": "correct|partially_correct|incorrect|not_answered", "reason": "...", "numeric_error": false, "unsupported_claims": false}}

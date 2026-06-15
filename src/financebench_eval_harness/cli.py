@@ -66,6 +66,27 @@ from financebench_eval_harness.eval_retrieval import (
     generate_retrieval_report,
     score_retrieval_run,
 )
+from financebench_eval_harness.rag_run import RAGRunError, run_rag_from_config
+from financebench_eval_harness.rag_run_config import (
+    DEFAULT_RAG_RUN_CONFIG_PATH,
+    RAGRunConfigError,
+    load_rag_run_config,
+)
+from financebench_eval_harness.analysis import (
+    join_retrieval_and_answer_scores,
+    summarize_joined_metrics,
+)
+from financebench_eval_harness.rag_report import (
+    RagReportError,
+    generate_rag_report,
+)
+from financebench_eval_harness.rag_score import RAGScoreError, score_rag_run
+from financebench_eval_harness.rag_score_config import (
+    DEFAULT_RAG_SCORE_CONFIG_PATH,
+    RAGScoreConfigError,
+    RAGScoreSettings,
+    load_rag_score_config,
+)
 
 
 DEFAULT_BASELINE_RUN_CONFIG_PATH = Path("configs/baseline_closed_book.yaml")
@@ -378,6 +399,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory to write the markdown report (default: reports/)",
     )
 
+    run_rag_parser = subparsers.add_parser(
+        "run-rag",
+        help="Generate RAG answers from retrieved chunks.",
+    )
+    run_rag_parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_RAG_RUN_CONFIG_PATH,
+        help="RAG run config YAML path.",
+    )
+    run_rag_parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional deterministic run directory name.",
+    )
+    run_rag_parser.add_argument(
+        "--limit",
+        type=_positive_int,
+        default=None,
+        help="Limit number of examples for smoke tests.",
+    )
+
     p_inspect_failure = subparsers.add_parser(
         "inspect-retrieval-failure",
         help="Print detailed retrieval inspection for a single question from a scored run.",
@@ -400,6 +443,117 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         metavar="QUESTION_ID",
         help="Question ID to inspect.",
+    )
+
+    report_rag_parser = subparsers.add_parser(
+        "report-rag",
+        help="Generate end-to-end RAG evaluation Markdown report.",
+    )
+    report_rag_parser.add_argument(
+        "--joined-dir",
+        type=Path,
+        required=True,
+        help="Directory containing joined_metrics.jsonl and joined_summary.json.",
+    )
+    report_rag_parser.add_argument(
+        "--rag-run-dir",
+        type=Path,
+        default=None,
+        help="Optional RAG run directory for model metadata and rich examples.",
+    )
+    report_rag_parser.add_argument(
+        "--retrieval-summary",
+        type=Path,
+        default=None,
+        help="Optional path to retrieval_summary.json for retrieval hit rates.",
+    )
+    report_rag_parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional run identifier used in the report title and filename.",
+    )
+    report_rag_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("reports"),
+        help="Directory to write the Markdown report (default: reports/).",
+    )
+
+    join_metrics_parser = subparsers.add_parser(
+        "join-metrics",
+        help="Join retrieval scores with answer scores per question.",
+    )
+    join_metrics_parser.add_argument(
+        "--retrieval-scores",
+        type=Path,
+        required=True,
+        help="Path to retrieval_scores.jsonl produced by eval-retrieval.",
+    )
+    join_metrics_parser.add_argument(
+        "--answer-scores",
+        type=Path,
+        required=True,
+        help="Path to scores.jsonl produced by run-rag.",
+    )
+    join_metrics_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        required=True,
+        help="Directory to write joined_metrics.jsonl and joined_summary.json.",
+    )
+    join_metrics_parser.add_argument(
+        "--k",
+        type=int,
+        default=5,
+        help="k value for hit@k retrieval signal (default: 5).",
+    )
+
+    p_inspect_rag = subparsers.add_parser(
+        "inspect-rag",
+        help="Inspect one RAG result end-to-end for a single question.",
+    )
+    p_inspect_rag.add_argument(
+        "--run",
+        type=Path,
+        required=True,
+        metavar="RAG_RUN_DIR",
+        help="RAG run directory (contains rag_predictions.jsonl and scores.jsonl).",
+    )
+    p_inspect_rag.add_argument(
+        "--question-id",
+        required=True,
+        metavar="QUESTION_ID",
+        help="Question ID to inspect.",
+    )
+    p_inspect_rag.add_argument(
+        "--retrieval-run",
+        type=Path,
+        default=None,
+        metavar="RETRIEVAL_RUN_DIR",
+        help="Retrieval run directory for chunk text and gold evidence (optional; auto-resolved from metadata if omitted).",
+    )
+    p_inspect_rag.add_argument(
+        "--joined-dir",
+        type=Path,
+        default=None,
+        help="Analysis directory with joined_metrics.jsonl for failure labels (optional).",
+    )
+
+    score_rag_parser = subparsers.add_parser(
+        "score-rag",
+        help="Score existing RAG predictions: lexical metrics, answer verdict, grounding verdict.",
+    )
+    score_rag_parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_RAG_SCORE_CONFIG_PATH,
+        help="RAG score config YAML path.",
+    )
+    score_rag_parser.add_argument(
+        "--run-dir",
+        type=Path,
+        default=None,
+        help="Override run_dir from config (directory with rag_predictions.jsonl).",
     )
 
     return parser
@@ -939,6 +1093,132 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(report)
         return 0
 
+    if args.command == "run-rag":
+        try:
+            result = _run_configured_rag_evaluation(
+                config_path=args.config,
+                run_id=args.run_id,
+                limit=args.limit,
+            )
+        except (RAGRunConfigError, RAGRunError, LLMConfigError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        print(f"RAG run output: {result.output_dir}")
+        print(f"Wrote config snapshot to {result.config_path}")
+        print(f"Wrote {result.example_count} predictions to {result.predictions_path}")
+        print(f"Wrote {result.example_count} score rows to {result.scores_path}")
+        print(f"Wrote run metadata to {result.run_metadata_path}")
+        print(f"Attempted: {result.attempted_count}")
+        print(f"Succeeded: {result.success_count}")
+        print(f"Errors: {result.error_count}")
+        return 0
+
+    if args.command == "report-rag":
+        try:
+            result = generate_rag_report(
+                args.joined_dir,
+                rag_run_dir=args.rag_run_dir,
+                retrieval_summary_path=args.retrieval_summary,
+                output_dir=args.output_dir,
+                run_id=args.run_id,
+            )
+        except (RagReportError, OSError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(f"RAG report: {result.report_path}")
+        print(f"Questions evaluated: {result.example_count}")
+        return 0
+
+    if args.command == "join-metrics":
+        if not args.retrieval_scores.is_file():
+            print(f"Retrieval scores file not found: {args.retrieval_scores}", file=sys.stderr)
+            return 1
+        if not args.answer_scores.is_file():
+            print(f"Answer scores file not found: {args.answer_scores}", file=sys.stderr)
+            return 1
+
+        retrieval_scores = _read_jsonl_file(args.retrieval_scores)
+        answer_scores = _read_jsonl_file(args.answer_scores)
+        rows = join_retrieval_and_answer_scores(retrieval_scores, answer_scores, k=args.k)
+        summary = summarize_joined_metrics(rows)
+
+        output_dir = args.output_dir
+        output_dir.mkdir(parents=True, exist_ok=True)
+        joined_path = output_dir / "joined_metrics.jsonl"
+        summary_path = output_dir / "joined_summary.json"
+
+        with joined_path.open("w", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        summary_path.write_text(
+            json.dumps(summary, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
+        print(f"Joined {summary['example_count']} questions.")
+        print(f"  retrieval_hit_answer_correct:  {summary['retrieval_hit_answer_correct']}")
+        print(f"  retrieval_hit_answer_wrong:    {summary['retrieval_hit_answer_wrong']}")
+        print(f"  retrieval_miss_answer_correct: {summary['retrieval_miss_answer_correct']}")
+        print(f"  retrieval_miss_answer_wrong:   {summary['retrieval_miss_answer_wrong']}")
+        print(f"Wrote joined metrics to {joined_path}")
+        print(f"Wrote summary to {summary_path}")
+        return 0
+
+    if args.command == "inspect-rag":
+        from financebench_eval_harness.rag_inspect import (
+            RagInspectError,
+            format_rag_inspection,
+            load_rag_inspection,
+        )
+
+        try:
+            result = load_rag_inspection(
+                args.run,
+                args.question_id,
+                retrieval_run_dir=args.retrieval_run,
+                joined_dir=args.joined_dir,
+            )
+        except RagInspectError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(format_rag_inspection(result))
+        return 0
+
+    if args.command == "score-rag":
+        try:
+            score_config = load_rag_score_config(args.config)
+        except RAGScoreConfigError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        if args.run_dir is not None:
+            from dataclasses import replace as _replace
+            score_config = _replace(
+                score_config,
+                settings=_replace(score_config.settings, run_dir=args.run_dir),
+            )
+
+        answer_judge_client = _build_score_judge_client(score_config.answer_judge)
+        grounding_judge_client = _build_score_judge_client(score_config.grounding_judge)
+
+        try:
+            result = score_rag_run(
+                score_config,
+                answer_judge_client=answer_judge_client,
+                grounding_judge_client=grounding_judge_client,
+            )
+        except RAGScoreError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        print(f"score-rag output: {result.output_dir}")
+        print(f"Scored {result.scored_count}/{result.example_count} examples ({result.error_count} errors)")
+        print(f"  answer scores:   {result.answer_scores_path}")
+        print(f"  grounding scores: {result.grounding_scores_path}")
+        print(f"  combined scores:  {result.combined_scores_path}")
+        return 0
+
     parser.error(f"Unknown command: {args.command}")
     return 2
 
@@ -984,6 +1264,59 @@ def _run_configured_evaluation(
         judge_client=judge_client,
         run_id=run_id,
     )
+
+
+def _run_configured_rag_evaluation(
+    *,
+    config_path: Path,
+    run_id: str | None,
+    limit: int | None,
+):
+    rag_config = load_rag_run_config(config_path)
+    effective_limit = limit if limit is not None else 1000
+    llm_client = _build_rag_llm_client(rag_config, limit=effective_limit)
+    judge_client = _build_rag_judge_client(rag_config, limit=effective_limit)
+    return run_rag_from_config(
+        rag_config,
+        llm_client,
+        judge_client=judge_client,
+        run_id=run_id,
+        limit=limit,
+    )
+
+
+def _build_rag_llm_client(config, *, limit: int) -> LLMClient:
+    if config.model.provider == "mock":
+        return MockLLMClient(config.model, responses=["mock response"] * limit)
+    if config.model.provider == "ollama":
+        return OllamaLLMClient(config.model)
+    raise LLMConfigError(f"Unsupported LLM provider: {config.model.provider}")
+
+
+def _build_score_judge_client(judge_config) -> LLMClient | None:
+    if judge_config is None:
+        return None
+    if judge_config.model.provider == "mock":
+        return MockLLMClient(
+            judge_config.model,
+            responses=['{"verdict": "correct", "reason": "Mock."}'] * 1000,
+        )
+    if judge_config.model.provider == "ollama":
+        return OllamaLLMClient(judge_config.model)
+    raise LLMConfigError(f"Unsupported judge LLM provider: {judge_config.model.provider}")
+
+
+def _build_rag_judge_client(config, *, limit: int) -> LLMClient | None:
+    if config.judge is None:
+        return None
+    if config.judge.model.provider == "mock":
+        return MockLLMClient(
+            config.judge.model,
+            responses=['{"verdict": "incorrect", "reason": "Mock judge response."}'] * limit,
+        )
+    if config.judge.model.provider == "ollama":
+        return OllamaLLMClient(config.judge.model)
+    raise LLMConfigError(f"Unsupported judge LLM provider: {config.judge.model.provider}")
 
 
 def _record_report_path(run_metadata_path: Path, report_path: Path) -> None:

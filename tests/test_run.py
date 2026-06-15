@@ -84,6 +84,7 @@ def test_run_evaluation_with_mock_llm_writes_config_snapshot_predictions_and_sco
             "normalized_string_match": False,
             "contains_gold_answer": False,
             "numeric_match": False,
+            "unit_match": False,
             "gold_numeric_values": [0.0],
             "prediction_numeric_values": [1.0],
         },
@@ -96,6 +97,7 @@ def test_run_evaluation_with_mock_llm_writes_config_snapshot_predictions_and_sco
         "normalized_string_match": False,
         "contains_gold_answer": False,
         "numeric_match": False,
+        "unit_match": False,
         "gold_numeric_values": [1.0],
         "prediction_numeric_values": [2.0],
     }
@@ -134,6 +136,8 @@ def test_run_evaluation_with_mock_llm_writes_config_snapshot_predictions_and_sco
         "contains_gold_answer_rate": 0.0,
         "numeric_match_count": 0,
         "numeric_match_rate": 0.0,
+        "unit_match_count": 0,
+        "unit_match_rate": 0.0,
     }
 
 

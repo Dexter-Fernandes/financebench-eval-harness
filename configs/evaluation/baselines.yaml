@@ -1,11 +1,13 @@
 evaluation:
   modes:
     closed_book:
+      context_source: none
       prompt:
         id: closed_book_v1
         version: v1
         template_path: prompts/baselines/closed_book_v1.txt
     oracle_context:
+      context_source: gold_evidence
       prompt:
         id: oracle_context_v1
         version: v1
