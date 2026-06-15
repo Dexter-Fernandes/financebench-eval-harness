@@ -1,6 +1,6 @@
 rag_score:
-  run_dir: runs/20260615T113628Z                  # set to your existing run-rag output dir
-  retrieval_results_path: runs/run_004/retrieval_results.jsonl  # optional; enables grounding judge
+  run_dir: runs/<timestamp>                 # set to your existing run-rag output dir
+  retrieval_results_path: runs/<run_id>/retrieval_results.jsonl  # optional; enables grounding judge
   output_dir: null                                # defaults to run_dir
   k: 5
 
