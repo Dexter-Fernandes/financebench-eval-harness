@@ -72,6 +72,7 @@ class EmbeddingComparisonConfig:
     index_base_dir: Path
     cache_dir: Path
     fail_fast: bool = False
+    run_rag: bool = False
 
 
 def load_embedding_comparison_config(path: str | Path) -> EmbeddingComparisonConfig:

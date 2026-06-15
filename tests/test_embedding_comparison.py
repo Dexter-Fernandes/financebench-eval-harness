@@ -28,6 +28,9 @@ from financebench_eval_harness.embedding_comparison import (
     make_model_decision,
     run_embedding_comparison,
 )
+from financebench_eval_harness.embedding_comparison_report import (
+    generate_embedding_comparison_report,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -577,3 +580,65 @@ class TestMakeModelDecision:
     def test_decision_empty_results(self) -> None:
         decision = make_model_decision([])
         assert decision["default_model"] is None
+
+
+# ---------------------------------------------------------------------------
+# M6.11 optional RAG flag
+# ---------------------------------------------------------------------------
+
+
+class TestOptionalRagFlag:
+    def test_rag_skipped_when_not_configured(self, tmp_path: Path) -> None:
+        config = _make_comparison_config(tmp_path)
+        # run_rag defaults to False; no rag_predictions.jsonl should appear
+        result = run_embedding_comparison(config)
+        model_runs_dir = result.run_dir / "model_runs"
+        for model_dir in model_runs_dir.iterdir():
+            assert not (model_dir / "rag_predictions.jsonl").is_file()
+
+    def test_config_has_run_rag_field(self) -> None:
+        from financebench_eval_harness.embedding_comparison_config import EmbeddingComparisonConfig
+        import inspect
+        sig = inspect.signature(EmbeddingComparisonConfig)
+        assert "run_rag" in sig.parameters
+
+
+# ---------------------------------------------------------------------------
+# M6.12 generate_embedding_comparison_report
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateEmbeddingComparisonReport:
+    def test_report_file_is_created(self, tmp_path: Path) -> None:
+        config = _make_comparison_config(tmp_path)
+        result = run_embedding_comparison(config)
+        report_path = generate_embedding_comparison_report(
+            result.run_dir, output_dir=tmp_path / "reports"
+        )
+        assert report_path.is_file()
+
+    def test_report_run_id_appears_in_filename(self, tmp_path: Path) -> None:
+        config = _make_comparison_config(tmp_path)
+        result = run_embedding_comparison(config)
+        report_path = generate_embedding_comparison_report(
+            result.run_dir, output_dir=tmp_path / "reports"
+        )
+        assert config.run_id in report_path.name
+
+    def test_report_contains_leaderboard_table(self, tmp_path: Path) -> None:
+        config = _make_comparison_config(tmp_path)
+        result = run_embedding_comparison(config)
+        report_path = generate_embedding_comparison_report(
+            result.run_dir, output_dir=tmp_path / "reports"
+        )
+        content = report_path.read_text(encoding="utf-8")
+        assert "evidence_hit@10" in content
+
+    def test_report_contains_recommended_default_section(self, tmp_path: Path) -> None:
+        config = _make_comparison_config(tmp_path)
+        result = run_embedding_comparison(config)
+        report_path = generate_embedding_comparison_report(
+            result.run_dir, output_dir=tmp_path / "reports"
+        )
+        content = report_path.read_text(encoding="utf-8")
+        assert "Recommended Default" in content or "default_model" in content
