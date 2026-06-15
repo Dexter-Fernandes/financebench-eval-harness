@@ -21,6 +21,9 @@ class EmbeddingConfig:
     base_url: str | None = None
     timeout_seconds: float = 30.0
     batch_size: int = 32
+    dimensions: int | None = None
+    normalize: bool = True
+    category: str | None = None
 
 
 class EmbeddingClient(Protocol):
@@ -252,6 +255,9 @@ def load_embedding_config(config_path: str | Path) -> EmbeddingConfig:
         base_url=section.get("base_url"),
         timeout_seconds=float(section.get("timeout_seconds", 30.0)),
         batch_size=int(section.get("batch_size", 32)),
+        dimensions=int(section["dimensions"]) if "dimensions" in section else None,
+        normalize=bool(section.get("normalize", True)),
+        category=section.get("category"),
     )
 
 

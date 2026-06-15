@@ -49,6 +49,9 @@ class PipelineConfig:
                 "base_url": self.embedding.base_url,
                 "timeout_seconds": self.embedding.timeout_seconds,
                 "batch_size": self.embedding.batch_size,
+                "dimensions": self.embedding.dimensions,
+                "normalize": self.embedding.normalize,
+                "category": self.embedding.category,
             },
         }
 
@@ -99,6 +102,9 @@ def load_pipeline_config(path: Path) -> PipelineConfig:
         base_url=emb_raw.get("base_url"),
         timeout_seconds=float(emb_raw.get("timeout_seconds", 30.0)),
         batch_size=int(emb_raw.get("batch_size", 32)),
+        dimensions=int(emb_raw["dimensions"]) if "dimensions" in emb_raw else None,
+        normalize=bool(emb_raw.get("normalize", True)),
+        category=emb_raw.get("category"),
     )
 
     return PipelineConfig(
