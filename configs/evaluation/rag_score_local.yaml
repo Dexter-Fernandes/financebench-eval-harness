@@ -1,0 +1,31 @@
+rag_score:
+  run_dir: runs/20260615T113628Z                  # set to your existing run-rag output dir
+  retrieval_results_path: runs/run_004/retrieval_results.jsonl  # optional; enables grounding judge
+  output_dir: null                                # defaults to run_dir
+  k: 5
+
+answer_judge:
+  enabled: true
+  provider: ollama
+  model_name: llama3.2:3b
+  temperature: 0.0
+  max_tokens: 256
+  timeout_seconds: 60
+  base_url: http://localhost:11434
+  prompt:
+    id: answer_correctness_v2
+    version: v2
+    template_path: prompts/judges/answer_correctness_v2.txt
+
+grounding_judge:
+  enabled: true
+  provider: ollama
+  model_name: llama3.2:3b
+  temperature: 0.0
+  max_tokens: 256
+  timeout_seconds: 60
+  base_url: http://localhost:11434
+  prompt:
+    id: answer_grounding_v1
+    version: v1
+    template_path: prompts/judges/answer_grounding_v1.txt

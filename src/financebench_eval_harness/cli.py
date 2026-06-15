@@ -80,6 +80,13 @@ from financebench_eval_harness.rag_report import (
     RagReportError,
     generate_rag_report,
 )
+from financebench_eval_harness.rag_score import RAGScoreError, score_rag_run
+from financebench_eval_harness.rag_score_config import (
+    DEFAULT_RAG_SCORE_CONFIG_PATH,
+    RAGScoreConfigError,
+    RAGScoreSettings,
+    load_rag_score_config,
+)
 
 
 DEFAULT_BASELINE_RUN_CONFIG_PATH = Path("configs/baseline_closed_book.yaml")
@@ -530,6 +537,23 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Analysis directory with joined_metrics.jsonl for failure labels (optional).",
+    )
+
+    score_rag_parser = subparsers.add_parser(
+        "score-rag",
+        help="Score existing RAG predictions: lexical metrics, answer verdict, grounding verdict.",
+    )
+    score_rag_parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_RAG_SCORE_CONFIG_PATH,
+        help="RAG score config YAML path.",
+    )
+    score_rag_parser.add_argument(
+        "--run-dir",
+        type=Path,
+        default=None,
+        help="Override run_dir from config (directory with rag_predictions.jsonl).",
     )
 
     return parser
@@ -1161,6 +1185,40 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(format_rag_inspection(result))
         return 0
 
+    if args.command == "score-rag":
+        try:
+            score_config = load_rag_score_config(args.config)
+        except RAGScoreConfigError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        if args.run_dir is not None:
+            from dataclasses import replace as _replace
+            score_config = _replace(
+                score_config,
+                settings=_replace(score_config.settings, run_dir=args.run_dir),
+            )
+
+        answer_judge_client = _build_score_judge_client(score_config.answer_judge)
+        grounding_judge_client = _build_score_judge_client(score_config.grounding_judge)
+
+        try:
+            result = score_rag_run(
+                score_config,
+                answer_judge_client=answer_judge_client,
+                grounding_judge_client=grounding_judge_client,
+            )
+        except RAGScoreError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        print(f"score-rag output: {result.output_dir}")
+        print(f"Scored {result.scored_count}/{result.example_count} examples ({result.error_count} errors)")
+        print(f"  answer scores:   {result.answer_scores_path}")
+        print(f"  grounding scores: {result.grounding_scores_path}")
+        print(f"  combined scores:  {result.combined_scores_path}")
+        return 0
+
     parser.error(f"Unknown command: {args.command}")
     return 2
 
@@ -1233,6 +1291,19 @@ def _build_rag_llm_client(config, *, limit: int) -> LLMClient:
     if config.model.provider == "ollama":
         return OllamaLLMClient(config.model)
     raise LLMConfigError(f"Unsupported LLM provider: {config.model.provider}")
+
+
+def _build_score_judge_client(judge_config) -> LLMClient | None:
+    if judge_config is None:
+        return None
+    if judge_config.model.provider == "mock":
+        return MockLLMClient(
+            judge_config.model,
+            responses=['{"verdict": "correct", "reason": "Mock."}'] * 1000,
+        )
+    if judge_config.model.provider == "ollama":
+        return OllamaLLMClient(judge_config.model)
+    raise LLMConfigError(f"Unsupported judge LLM provider: {judge_config.model.provider}")
 
 
 def _build_rag_judge_client(config, *, limit: int) -> LLMClient | None:

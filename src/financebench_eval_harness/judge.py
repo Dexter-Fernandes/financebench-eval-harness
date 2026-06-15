@@ -9,6 +9,7 @@ from typing import Any
 from financebench_eval_harness.run_config import JudgePromptConfig
 
 JUDGE_VERDICTS = ("correct", "partially_correct", "incorrect", "not_answered")
+GROUNDING_VERDICTS = ("grounded", "partially_grounded", "ungrounded")
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,52 @@ def render_judge_prompt_for_processed_example(
         prompt_version=prompt_config.version,
         template_path=prompt_config.template_path,
     )
+
+
+def render_grounding_prompt(
+    prompt_config: JudgePromptConfig,
+    *,
+    question: str,
+    prediction: str,
+    retrieved_context: str,
+) -> RenderedJudgePrompt:
+    template = _read_prompt_template(prompt_config.template_path)
+    return RenderedJudgePrompt(
+        text=template.format(
+            question=question,
+            prediction=prediction,
+            retrieved_context=retrieved_context,
+        ),
+        prompt_id=prompt_config.id,
+        prompt_version=prompt_config.version,
+        template_path=prompt_config.template_path,
+    )
+
+
+def parse_grounding_response(raw_response: str) -> dict[str, object]:
+    try:
+        decoded_response = json.loads(raw_response)
+    except JSONDecodeError as exc:
+        raise JudgeError("Grounding judge response was not valid JSON") from exc
+
+    if not isinstance(decoded_response, dict):
+        raise JudgeError("Grounding judge response must be a JSON object")
+
+    verdict = _string_field(decoded_response, "verdict")
+    reason = _string_field(decoded_response, "reason")
+    if verdict not in GROUNDING_VERDICTS:
+        raise JudgeError(f"Unsupported grounding verdict: {verdict}")
+
+    citation_correct = _optional_bool_field(decoded_response, "citation_correct")
+    unsupported_claims_raw = decoded_response.get("unsupported_claims")
+    unsupported_claims = str(unsupported_claims_raw) if unsupported_claims_raw is not None else None
+
+    return {
+        "verdict": verdict,
+        "reason": reason,
+        "citation_correct": citation_correct,
+        "unsupported_claims": unsupported_claims,
+    }
 
 
 def parse_judge_response(raw_response: str) -> dict[str, object]:
@@ -136,6 +183,8 @@ def _optional_bool_field(
     if field_name not in decoded_response:
         return None
     value = decoded_response[field_name]
+    if value is None:
+        return None
     if not isinstance(value, bool):
         raise JudgeError(
             f"Judge response field '{field_name}' must be a boolean, got: {type(value).__name__}"
@@ -151,10 +200,13 @@ def _string_field(decoded_response: dict[str, Any], field_name: str) -> str:
 
 
 __all__ = [
+    "GROUNDING_VERDICTS",
     "JUDGE_VERDICTS",
     "JudgeError",
     "RenderedJudgePrompt",
+    "parse_grounding_response",
     "parse_judge_response",
+    "render_grounding_prompt",
     "render_judge_prompt_for_processed_example",
     "summarize_judges",
 ]

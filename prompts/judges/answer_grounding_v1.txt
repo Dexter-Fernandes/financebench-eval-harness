@@ -1,0 +1,19 @@
+You are evaluating whether a financial model answer is grounded in the retrieved context.
+
+Question:
+{question}
+
+Model prediction:
+{prediction}
+
+Retrieved context (what the model saw):
+{retrieved_context}
+
+Instructions:
+- verdict: "grounded" if every specific claim in the prediction can be traced to the retrieved context; "partially_grounded" if some claims are supported but others are not; "ungrounded" if the prediction makes claims not supported by any retrieved chunk.
+- citation_correct: true if the prediction references the correct source document; false if it cites an incorrect source; null if no explicit citation is present in the prediction.
+- unsupported_claims: brief description of any unsupported claims, or null if none.
+- reason: one sentence explaining the verdict.
+
+Return ONLY valid JSON with no additional text:
+{{"verdict": "grounded|partially_grounded|ungrounded", "citation_correct": null, "unsupported_claims": null, "reason": "..."}}
