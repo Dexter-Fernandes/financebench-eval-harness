@@ -362,6 +362,108 @@ def _estimate_cost(spec: EmbeddingModelSpec, chunks: list[Chunk]) -> float | Non
 # ---------------------------------------------------------------------------
 
 
+def compute_leaderboard(results: list[ModelComparisonResult]) -> list[dict[str, Any]]:
+    """Build a leaderboard sorted by evidence_hit@10 descending.
+
+    Failed models (result.error is not None) are excluded.
+    """
+    rows: list[dict[str, Any]] = []
+    for r in results:
+        if not r.succeeded or r.summary is None:
+            continue
+        s = r.summary
+        row: dict[str, Any] = {
+            "model": r.spec.name,
+            "provider": r.spec.provider,
+            "category": r.spec.category,
+            "embedding_dim": r.spec.dimensions,
+            "doc_hit@10": s.get("doc_hit@10_rate", 0.0),
+            "page_hit@10": s.get("page_hit@10_rate", 0.0),
+            "evidence_hit@10": s.get("evidence_text_hit@10_rate", 0.0),
+            "mrr@10": s.get("doc_mrr@10", 0.0),
+            "median_first_hit_rank": s.get("median_first_hit_rank"),
+            "embedding_latency_s": r.embedding_latency_s,
+            "retrieval_latency_s": r.retrieval_latency_s,
+            "index_size_mb": r.index_size_mb,
+            "estimated_cost_usd": r.estimated_cost_usd,
+        }
+        rows.append(row)
+    rows.sort(key=lambda x: x["evidence_hit@10"], reverse=True)
+    return rows
+
+
+def _write_leaderboard(leaderboard: list[dict[str, Any]], run_dir: Path) -> None:
+    """Write leaderboard as JSON and CSV."""
+    (run_dir / "embedding_leaderboard.json").write_text(
+        json.dumps(leaderboard, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    if not leaderboard:
+        (run_dir / "embedding_leaderboard.csv").write_text("", encoding="utf-8")
+        return
+    columns = list(leaderboard[0].keys())
+    lines = [",".join(columns)]
+    for row in leaderboard:
+        values = [str(row.get(c, "")) for c in columns]
+        lines.append(",".join(values))
+    (run_dir / "embedding_leaderboard.csv").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8"
+    )
+
+
+def make_model_decision(results: list[ModelComparisonResult]) -> dict[str, Any]:
+    """Assign model roles based on category and evidence_hit@10.
+
+    Roles:
+      default_model            — highest evidence_hit@10 overall
+      cheap_baseline           — best cheap_api model
+      quality_baseline         — best quality_api model
+      local_baseline           — best open_source model (no API cost)
+      finance_specialized_candidate — best finance_specialized model
+    """
+    successful = [r for r in results if r.succeeded and r.summary is not None]
+
+    def _best_in_category(category: str) -> str | None:
+        candidates = [r for r in successful if r.spec.category == category]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda r: r.summary.get("evidence_text_hit@10_rate", 0.0)).spec.name  # type: ignore[union-attr]
+
+    def _best_overall() -> str | None:
+        if not successful:
+            return None
+        return max(successful, key=lambda r: r.summary.get("evidence_text_hit@10_rate", 0.0)).spec.name  # type: ignore[union-attr]
+
+    default = _best_overall()
+    local = _best_in_category("open_source")
+    cheap = _best_in_category("cheap_api")
+    quality = _best_in_category("quality_api")
+    finance = _best_in_category("finance_specialized")
+
+    if default is not None:
+        winner = next((r for r in successful if r.spec.name == default), None)
+        score = winner.summary.get("evidence_text_hit@10_rate", 0.0) if winner and winner.summary else 0.0
+        reason = (
+            f"{default} achieved {score:.2f} evidence_hit@10"
+            + (" with zero API cost and local reproducibility."
+               if winner and winner.spec.category == "open_source"
+               else ".")
+        )
+    else:
+        reason = "No successful model runs to evaluate."
+
+    return {
+        "default_model": default,
+        "cheap_baseline": cheap,
+        "quality_baseline": quality,
+        "local_baseline": local,
+        "finance_specialized_candidate": finance,
+        "primary_metric": "evidence_hit@10",
+        "reason": reason,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 def run_embedding_comparison(config: EmbeddingComparisonConfig) -> EmbeddingComparisonResult:
     """Run retrieval comparison across all embedding models in the config.
 
@@ -419,6 +521,15 @@ def run_embedding_comparison(config: EmbeddingComparisonConfig) -> EmbeddingComp
             if config.fail_fast:
                 raise
 
+    leaderboard = compute_leaderboard(model_results)
+    _write_leaderboard(leaderboard, run_dir)
+
+    decision = make_model_decision(model_results)
+    (run_dir / "embedding_decision.json").write_text(
+        json.dumps(decision, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
     return EmbeddingComparisonResult(run_dir=run_dir, model_results=model_results)
 
 
@@ -427,5 +538,7 @@ __all__ = [
     "EmbeddingProviderUnavailableError",
     "ModelComparisonResult",
     "build_client_for_model_spec",
+    "compute_leaderboard",
+    "make_model_decision",
     "run_embedding_comparison",
 ]

@@ -20,8 +20,12 @@ from financebench_eval_harness.embedding_comparison_config import (
     load_embedding_comparison_config,
 )
 from financebench_eval_harness.embedding_comparison import (
+    EmbeddingComparisonResult,
     EmbeddingProviderUnavailableError,
+    ModelComparisonResult,
     build_client_for_model_spec,
+    compute_leaderboard,
+    make_model_decision,
     run_embedding_comparison,
 )
 
@@ -438,3 +442,138 @@ class TestRunEmbeddingComparison:
         import yaml
         snapshot = yaml.safe_load((result.run_dir / "config.yaml").read_text())
         assert "corpus_hash" in snapshot
+
+    def test_leaderboard_json_written(self, tmp_path: Path) -> None:
+        config = _make_comparison_config(tmp_path)
+        result = run_embedding_comparison(config)
+        assert (result.run_dir / "embedding_leaderboard.json").is_file()
+
+    def test_leaderboard_csv_written(self, tmp_path: Path) -> None:
+        config = _make_comparison_config(tmp_path)
+        result = run_embedding_comparison(config)
+        assert (result.run_dir / "embedding_leaderboard.csv").is_file()
+
+
+# ---------------------------------------------------------------------------
+# M6.8 compute_leaderboard
+# ---------------------------------------------------------------------------
+
+
+def _make_model_result(
+    name: str,
+    provider: str,
+    category: str,
+    evidence_hit: float,
+    cost: float | None = None,
+    error: str | None = None,
+) -> ModelComparisonResult:
+    spec = EmbeddingModelSpec(name=name, provider=provider, category=category)
+    summary: dict | None = None
+    if error is None:
+        summary = {
+            f"doc_hit@10_rate": 0.8,
+            f"page_hit@10_rate": 0.7,
+            f"evidence_text_hit@10_rate": evidence_hit,
+            f"doc_mrr@10": 0.6,
+            "median_first_hit_rank": 2,
+            "example_count": 10,
+        }
+    return ModelComparisonResult(
+        spec=spec,
+        run_dir=Path("/fake"),
+        summary=summary,
+        embedding_latency_s=1.0,
+        retrieval_latency_s=0.5,
+        index_size_mb=10.0,
+        estimated_cost_usd=cost,
+        error=error,
+    )
+
+
+class TestComputeLeaderboard:
+    def test_sorts_by_evidence_hit_10_descending(self) -> None:
+        results = [
+            _make_model_result("model-a", "mock", "cheap_api", evidence_hit=0.58),
+            _make_model_result("model-b", "mock", "quality_api", evidence_hit=0.67),
+            _make_model_result("model-c", "mock", "open_source", evidence_hit=0.61),
+        ]
+        leaderboard = compute_leaderboard(results)
+        assert leaderboard[0]["model"] == "model-b"
+        assert leaderboard[1]["model"] == "model-c"
+        assert leaderboard[2]["model"] == "model-a"
+
+    def test_failed_model_excluded_from_leaderboard(self) -> None:
+        results = [
+            _make_model_result("model-ok", "mock", "open_source", evidence_hit=0.6),
+            _make_model_result("model-bad", "mock", "cheap_api", evidence_hit=0.0, error="failed"),
+        ]
+        leaderboard = compute_leaderboard(results)
+        assert len(leaderboard) == 1
+        assert leaderboard[0]["model"] == "model-ok"
+
+    def test_leaderboard_contains_required_columns(self) -> None:
+        results = [_make_model_result("m", "mock", "open_source", evidence_hit=0.5)]
+        leaderboard = compute_leaderboard(results)
+        row = leaderboard[0]
+        required = {
+            "model", "provider", "category", "evidence_hit@10",
+            "page_hit@10", "doc_hit@10", "mrr@10",
+            "embedding_latency_s", "retrieval_latency_s", "index_size_mb",
+        }
+        assert required.issubset(row.keys())
+
+
+# ---------------------------------------------------------------------------
+# M6.10 make_model_decision
+# ---------------------------------------------------------------------------
+
+
+class TestMakeModelDecision:
+    def _make_results_all_categories(self) -> list[ModelComparisonResult]:
+        return [
+            _make_model_result("te3-small", "openai", "cheap_api", evidence_hit=0.58, cost=0.01),
+            _make_model_result("te3-large", "openai", "quality_api", evidence_hit=0.64, cost=0.05),
+            _make_model_result("bge-m3", "sentence_transformers", "open_source", evidence_hit=0.61, cost=None),
+            _make_model_result("voyage-finance-2", "voyage", "finance_specialized", evidence_hit=0.67, cost=0.04),
+        ]
+
+    def test_assigns_local_baseline_to_open_source(self) -> None:
+        results = self._make_results_all_categories()
+        decision = make_model_decision(results)
+        assert decision["local_baseline"] == "bge-m3"
+
+    def test_assigns_cheap_baseline_to_cheap_api(self) -> None:
+        results = self._make_results_all_categories()
+        decision = make_model_decision(results)
+        assert decision["cheap_baseline"] == "te3-small"
+
+    def test_assigns_quality_baseline_to_quality_api(self) -> None:
+        results = self._make_results_all_categories()
+        decision = make_model_decision(results)
+        assert decision["quality_baseline"] == "te3-large"
+
+    def test_assigns_finance_specialized(self) -> None:
+        results = self._make_results_all_categories()
+        decision = make_model_decision(results)
+        assert decision["finance_specialized_candidate"] == "voyage-finance-2"
+
+    def test_default_model_has_highest_evidence_hit(self) -> None:
+        results = self._make_results_all_categories()
+        decision = make_model_decision(results)
+        assert decision["default_model"] == "voyage-finance-2"
+
+    def test_decision_includes_reason(self) -> None:
+        results = self._make_results_all_categories()
+        decision = make_model_decision(results)
+        assert "reason" in decision
+        assert isinstance(decision["reason"], str)
+        assert len(decision["reason"]) > 0
+
+    def test_decision_json_written_by_runner(self, tmp_path: Path) -> None:
+        config = _make_comparison_config(tmp_path)
+        result = run_embedding_comparison(config)
+        assert (result.run_dir / "embedding_decision.json").is_file()
+
+    def test_decision_empty_results(self) -> None:
+        decision = make_model_decision([])
+        assert decision["default_model"] is None
