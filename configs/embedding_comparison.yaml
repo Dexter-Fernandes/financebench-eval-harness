@@ -1,0 +1,54 @@
+comparison:
+  # Unique ID for this comparison run — auto-generated from timestamp if absent.
+  # run_id: emb_cmp_20260615
+
+  runs_dir: runs/embedding_comparison
+  reports_dir: reports
+  index_base_dir: data/indexes/financebench
+  cache_dir: data/cache/embeddings
+
+  # Set to true to abort the whole comparison on the first model failure.
+  fail_fast: false
+
+  # These settings are FIXED across all models.
+  # The runner validates corpus_hash consistency so you know the improvement
+  # came from the embedding model, not from different chunks or docs.
+  retrieval:
+    chunks_path: data/chunks/financebench/chunks.jsonl
+    questions_path: data/financebench/examples.jsonl
+    top_k: 10
+    evidence_overlap_threshold: 0.5
+    chunking:
+      strategy: recursive_text
+      chunk_size: 800
+      chunk_overlap: 150
+      min_chunk_chars: 100
+
+  embedding_models:
+    - name: text-embedding-3-small
+      provider: openai
+      dimensions: 1536
+      normalize: true
+      batch_size: 512
+      category: cheap_api
+
+    - name: text-embedding-3-large
+      provider: openai
+      dimensions: 3072
+      normalize: true
+      batch_size: 256
+      category: quality_api
+
+    - name: BAAI/bge-m3
+      provider: sentence_transformers
+      dimensions: 1024
+      normalize: true
+      batch_size: 64
+      category: open_source
+
+    - name: voyage-finance-2
+      provider: voyage
+      dimensions: 1024
+      normalize: true
+      batch_size: 128
+      category: finance_specialized
