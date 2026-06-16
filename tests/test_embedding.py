@@ -66,6 +66,30 @@ class TestEmbeddingConfig:
         assert cfg.timeout_seconds == pytest.approx(60.0)
         assert cfg.batch_size == 16
 
+    def test_dimensions_defaults_to_none(self) -> None:
+        cfg = EmbeddingConfig(provider="mock", model_name="mock-embed")
+        assert cfg.dimensions is None
+
+    def test_normalize_defaults_to_true(self) -> None:
+        cfg = EmbeddingConfig(provider="mock", model_name="mock-embed")
+        assert cfg.normalize is True
+
+    def test_category_defaults_to_none(self) -> None:
+        cfg = EmbeddingConfig(provider="mock", model_name="mock-embed")
+        assert cfg.category is None
+
+    def test_m6_fields_configurable(self) -> None:
+        cfg = EmbeddingConfig(
+            provider="openai",
+            model_name="text-embedding-3-small",
+            dimensions=1536,
+            normalize=False,
+            category="cheap_api",
+        )
+        assert cfg.dimensions == 1536
+        assert cfg.normalize is False
+        assert cfg.category == "cheap_api"
+
 
 # ---------------------------------------------------------------------------
 # MockEmbeddingClient

@@ -1,0 +1,68 @@
+comparison:
+  # Unique ID for this comparison run — auto-generated from timestamp if absent.
+  # run_id: emb_cmp_20260615
+
+  runs_dir: runs/embedding_comparison
+  reports_dir: reports
+  index_base_dir: data/indexes/financebench
+  cache_dir: data/cache/embeddings
+
+  # Set to true to abort the whole comparison on the first model failure.
+  fail_fast: false
+
+  # These settings are FIXED across all models.
+  # The runner validates corpus_hash consistency so you know the improvement
+  # came from the embedding model, not from different chunks or docs.
+  retrieval:
+    chunks_path: data/processed/financebench/chunks.jsonl
+    questions_path: data/processed/financebench/examples.jsonl
+    top_k: 10
+    evidence_overlap_threshold: 0.5
+    chunking:
+      strategy: recursive_text
+      chunk_size: 800
+      chunk_overlap: 150
+      min_chunk_chars: 100
+
+  embedding_models:
+    - name: nomic-embed-text
+      provider: ollama
+      dimensions: 768
+      normalize: true
+      batch_size: 32
+      category: local_baseline
+
+    # - name: bge-m3
+    #   provider: ollama
+    #   dimensions: 1024
+    #   normalize: true
+    #   batch_size: 32
+    #   category: open_source
+
+    # - name: all-minilm
+    #   provider: ollama
+    #   dimensions: 384
+    #   normalize: true
+    #   batch_size: 64
+    #   category: local_baseline
+
+    # - name: mxbai-embed-large
+    #   provider: ollama
+    #   dimensions: 1024
+    #   normalize: true
+    #   batch_size: 32
+    #   category: open_source
+
+    # - name: snowflake-arctic-embed:335m
+    #   provider: ollama
+    #   dimensions: 1024
+    #   normalize: true
+    #   batch_size: 32
+    #   category: open_source
+
+    - name: granite-embedding:278m
+      provider: ollama
+      dimensions: 768
+      normalize: true
+      batch_size: 32
+      category: open_source

@@ -556,6 +556,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override run_dir from config (directory with rag_predictions.jsonl).",
     )
 
+    cmp_parser = subparsers.add_parser(
+        "compare-embeddings",
+        help="Run retrieval comparison across multiple embedding models (M6).",
+    )
+    cmp_parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("configs/embedding_comparison.yaml"),
+        help="Embedding comparison config YAML.",
+    )
+    cmp_parser.add_argument(
+        "--report-dir",
+        type=Path,
+        default=Path("reports"),
+        help="Directory for the generated Markdown report.",
+    )
+    cmp_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Validate config and list models without running embeddings.",
+    )
+
     return parser
 
 
@@ -1219,6 +1242,75 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"  combined scores:  {result.combined_scores_path}")
         return 0
 
+    if args.command == "compare-embeddings":
+        from financebench_eval_harness.embedding_comparison_config import (
+            EmbeddingComparisonConfigError,
+            load_embedding_comparison_config,
+        )
+        from financebench_eval_harness.embedding_comparison import run_embedding_comparison
+
+        try:
+            cmp_config = load_embedding_comparison_config(args.config)
+        except EmbeddingComparisonConfigError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        if args.dry_run:
+            import yaml as _yaml
+            print(f"[dry-run] {len(cmp_config.embedding_models)} models to compare:")
+            for spec in cmp_config.embedding_models:
+                print(f"  {spec.provider}/{spec.name} ({spec.category})")
+            print(f"[dry-run] Fixed chunks: {cmp_config.retrieval.chunks_path}")
+            print(f"[dry-run] top_k={cmp_config.retrieval.top_k}")
+            # Write stub run dir so the report generator has something to read.
+            dry_run_dir = cmp_config.runs_dir / cmp_config.run_id
+            dry_run_dir.mkdir(parents=True, exist_ok=True)
+            (dry_run_dir / "embedding_leaderboard.json").write_text("[]", encoding="utf-8")
+            (dry_run_dir / "embedding_decision.json").write_text("{}", encoding="utf-8")
+            (dry_run_dir / "config.yaml").write_text(
+                _yaml.dump({
+                    "run_id": cmp_config.run_id,
+                    "dry_run": True,
+                    "chunks_path": str(cmp_config.retrieval.chunks_path),
+                    "questions_path": str(cmp_config.retrieval.questions_path),
+                    "top_k": cmp_config.retrieval.top_k,
+                    "evidence_overlap_threshold": cmp_config.retrieval.evidence_overlap_threshold,
+                    "embedding_models": [
+                        {"name": s.name, "provider": s.provider, "category": s.category}
+                        for s in cmp_config.embedding_models
+                    ],
+                }),
+                encoding="utf-8",
+            )
+            try:
+                from financebench_eval_harness.embedding_comparison_report import (
+                    generate_embedding_comparison_report,
+                )
+                report_path = generate_embedding_comparison_report(
+                    dry_run_dir, output_dir=args.report_dir, dry_run=True
+                )
+                print(f"[dry-run] Report:   {report_path}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[dry-run] Warning: report generation failed: {exc}", file=sys.stderr)
+            return 0
+
+        result = _run_embedding_comparison_with_progress(cmp_config, run_embedding_comparison)
+
+        _print_comparison_summary(result, top_k=cmp_config.retrieval.top_k)
+
+        try:
+            from financebench_eval_harness.embedding_comparison_report import (
+                generate_embedding_comparison_report,
+            )
+            report_path = generate_embedding_comparison_report(
+                result.run_dir, output_dir=args.report_dir
+            )
+            print(f"Comparison report: {report_path}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: report generation failed: {exc}", file=sys.stderr)
+
+        return 0 if result.failed_count == 0 else 2
+
     parser.error(f"Unknown command: {args.command}")
     return 2
 
@@ -1361,6 +1453,126 @@ def _build_judge_client(run_config) -> LLMClient | None:
     )
 
 
+def _run_embedding_comparison_with_progress(cmp_config, run_embedding_comparison):
+    """Run compare-embeddings with a rich startup panel and live progress bars."""
+    try:
+        from rich import box
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.progress import (
+            BarColumn,
+            MofNCompleteColumn,
+            Progress,
+            TaskProgressColumn,
+            TextColumn,
+            TimeElapsedColumn,
+            TimeRemainingColumn,
+        )
+        from rich.text import Text
+    except ImportError:
+        return run_embedding_comparison(cmp_config)
+
+    console = Console()
+
+    n = len(cmp_config.embedding_models)
+    model_names = ", ".join(s.name for s in cmp_config.embedding_models)
+    info = Text()
+    info.append(f"  {n} model{'s' if n != 1 else ''}  ·  ")
+    info.append(model_names, style="cyan")
+    info.append(f"\n  chunks     {cmp_config.retrieval.chunks_path}")
+    info.append(f"\n  questions  {cmp_config.retrieval.questions_path}")
+    info.append(f"\n  top_k={cmp_config.retrieval.top_k}  ·  fail_fast={cmp_config.fail_fast}")
+    console.print(Panel(info, title="Embedding Comparison", border_style="blue"))
+
+    progress = Progress(
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        console=console,
+    )
+
+    with progress:
+        model_task = progress.add_task("Models", total=n)
+        chunk_task = progress.add_task("Chunks", total=1, visible=False)
+
+        def on_event(event: str, info: dict) -> None:
+            if event == "model_start":
+                progress.update(
+                    model_task,
+                    description=f"[{info['index']}/{info['total']}] {info['model']}",
+                )
+                progress.update(chunk_task, visible=False, completed=0, total=1)
+            elif event in ("model_done", "model_failed"):
+                progress.advance(model_task)
+            elif event == "embed_start":
+                total = info["total_to_embed"]
+                hits = info["cache_hits"]
+                progress.update(
+                    chunk_task,
+                    description=f"  Embedding  ({hits} cached)",
+                    total=total,
+                    completed=0,
+                    visible=total > 0,
+                )
+            elif event == "embed_progress":
+                progress.update(chunk_task, completed=info["completed"])
+
+        return run_embedding_comparison(cmp_config, on_event=on_event)
+
+
+def _print_comparison_summary(result, *, top_k: int = 10) -> None:
+    """Print post-run summary table."""
+    try:
+        from rich import box
+        from rich.console import Console
+        from rich.table import Table
+    except ImportError:
+        print(f"Comparison run: {result.run_dir}")
+        print(f"Models succeeded: {result.succeeded_count}")
+        print(f"Models failed: {result.failed_count}")
+        if result.failed_models:
+            for name, err in result.failed_models.items():
+                print(f"  FAILED {name}: {err}", file=sys.stderr)
+        return
+
+    console = Console()
+    table = Table(box=box.SIMPLE_HEAD)
+    table.add_column("Model", style="cyan", no_wrap=True)
+    table.add_column("Provider")
+    table.add_column("Category")
+    table.add_column("Hit@10", justify="right")
+    table.add_column("Embed latency", justify="right")
+    table.add_column("Cost", justify="right")
+
+    for mr in result.model_results:
+        spec = mr.spec
+        if mr.succeeded:
+            hit = mr.summary.get(f"evidence_text_hit@{top_k}_rate", 0.0) if mr.summary else 0.0
+            latency = f"{mr.embedding_latency_s:.1f}s" if mr.embedding_latency_s else "cached"
+            cost = f"${mr.estimated_cost_usd:.4f}" if mr.estimated_cost_usd else "free"
+            table.add_row(spec.name, spec.provider, spec.category, f"{hit:.3f}", latency, cost)
+        else:
+            table.add_row(
+                f"[red]{spec.name}[/red]",
+                spec.provider,
+                spec.category,
+                "[red]FAILED[/red]",
+                "—",
+                "—",
+            )
+
+    console.print()
+    console.print(table)
+    console.print(f"Run directory: [dim]{result.run_dir}[/dim]")
+    if result.failed_models:
+        for name, err in result.failed_models.items():
+            console.print(f"  [red]✗[/red] {name}: {err}")
+    console.print()
+
+
 def _build_index_with_progress(chunks, embedding_client, retrieval_config, index_dir, *, show_progress: bool = False):
     """Call build_index, optionally with a rich progress bar."""
     if not show_progress:
@@ -1402,6 +1614,9 @@ def _build_embedding_client(config: EmbeddingConfig):
         return MockEmbeddingClient(config)
     if config.provider == "ollama":
         return OllamaEmbeddingClient(config)
+    if config.provider == "sentence_transformers":
+        from financebench_eval_harness.embedding import SentenceTransformersEmbeddingClient
+        return SentenceTransformersEmbeddingClient(config)
     from financebench_eval_harness.embedding import EmbeddingProviderError
     raise EmbeddingProviderError(f"Unsupported embedding provider: {config.provider}")
 
