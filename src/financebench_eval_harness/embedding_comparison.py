@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
@@ -207,6 +207,7 @@ def _build_or_load_index(
     spec: EmbeddingModelSpec,
     corpus_hash: str,
     cache: EmbeddingCache,
+    on_event: Callable[[str, dict], None] | None = None,
 ) -> tuple[Any, IndexMetadata, float]:
     """Build (or reuse) the FAISS index for one model. Returns (store, meta, latency_s)."""
     from financebench_eval_harness.vector_store import FaissVectorStore
@@ -233,9 +234,22 @@ def _build_or_load_index(
     if miss_indices:
         miss_texts = [chunks[i].text for i in miss_indices]
         batch_size = client.config.batch_size
+        if on_event:
+            on_event("embed_start", {
+                "model": spec.name,
+                "cache_hits": hits,
+                "cache_misses": misses,
+                "total_to_embed": len(miss_texts),
+            })
         new_vecs: list[list[float]] = []
         for start in range(0, len(miss_texts), batch_size):
             new_vecs.extend(client.embed_texts(miss_texts[start:start + batch_size]))
+            if on_event:
+                on_event("embed_progress", {
+                    "model": spec.name,
+                    "completed": min(start + batch_size, len(miss_texts)),
+                    "total": len(miss_texts),
+                })
         cache.put_batch(miss_texts, new_vecs)
         for idx, vec in zip(miss_indices, new_vecs):
             cached_vecs[idx] = vec
@@ -275,6 +289,7 @@ def _run_one_model(
     corpus_hash: str,
     config: EmbeddingComparisonConfig,
     model_run_dir: Path,
+    on_event: Callable[[str, dict], None] | None = None,
 ) -> ModelComparisonResult:
     """Run index build + retrieval + scoring for one model."""
     model_run_dir.mkdir(parents=True, exist_ok=True)
@@ -289,7 +304,7 @@ def _run_one_model(
     )
 
     store, index_meta, embed_latency = _build_or_load_index(
-        chunks, client, config, spec, corpus_hash, cache
+        chunks, client, config, spec, corpus_hash, cache, on_event=on_event
     )
 
     # Run retrieval.
@@ -464,11 +479,19 @@ def make_model_decision(results: list[ModelComparisonResult]) -> dict[str, Any]:
     }
 
 
-def run_embedding_comparison(config: EmbeddingComparisonConfig) -> EmbeddingComparisonResult:
+def run_embedding_comparison(
+    config: EmbeddingComparisonConfig,
+    *,
+    on_event: Callable[[str, dict], None] | None = None,
+) -> EmbeddingComparisonResult:
     """Run retrieval comparison across all embedding models in the config.
 
     For each model: build/load index, retrieve, score.
     Failed models are logged; the loop continues unless fail_fast=True.
+
+    on_event: optional callback fired with (event_name, info_dict) at key
+    points. Recognised events: model_start, model_done, model_failed,
+    embed_start, embed_progress.
     """
     # Load corpus.
     chunks = _load_chunks(config.retrieval.chunks_path)
@@ -500,16 +523,35 @@ def run_embedding_comparison(config: EmbeddingComparisonConfig) -> EmbeddingComp
     model_results: list[ModelComparisonResult] = []
     model_runs_dir = run_dir / "model_runs"
 
-    for spec in config.embedding_models:
+    n_models = len(config.embedding_models)
+    for idx, spec in enumerate(config.embedding_models):
         model_run_dir = model_runs_dir / spec.slug
         logger.info("Running comparison for model: %s (%s)", spec.name, spec.provider)
+        if on_event:
+            on_event("model_start", {
+                "model": spec.name,
+                "provider": spec.provider,
+                "index": idx + 1,
+                "total": n_models,
+            })
+        t_model = time.perf_counter()
         try:
-            result = _run_one_model(spec, chunks, questions, corpus_hash, config, model_run_dir)
+            result = _run_one_model(
+                spec, chunks, questions, corpus_hash, config, model_run_dir,
+                on_event=on_event,
+            )
             model_results.append(result)
-            logger.info("[%s] Done. evidence_hit@%d = %.3f",
-                        spec.name, config.retrieval.top_k,
-                        result.summary.get(f"evidence_text_hit@{config.retrieval.top_k}_rate", 0.0)
-                        if result.summary else 0.0)
+            hit_rate = (
+                result.summary.get(f"evidence_text_hit@{config.retrieval.top_k}_rate", 0.0)
+                if result.summary else 0.0
+            )
+            logger.info("[%s] Done. evidence_hit@%d = %.3f", spec.name, config.retrieval.top_k, hit_rate)
+            if on_event:
+                on_event("model_done", {
+                    "model": spec.name,
+                    "evidence_hit_at_10": hit_rate,
+                    "elapsed_s": time.perf_counter() - t_model,
+                })
         except Exception as exc:  # noqa: BLE001
             msg = f"{type(exc).__name__}: {exc}"
             logger.error("[%s] FAILED: %s", spec.name, msg)
@@ -518,6 +560,11 @@ def run_embedding_comparison(config: EmbeddingComparisonConfig) -> EmbeddingComp
                 run_dir=model_run_dir,
                 error=msg,
             ))
+            if on_event:
+                on_event("model_failed", {
+                    "model": spec.name,
+                    "error": msg,
+                })
             if config.fail_fast:
                 raise
 

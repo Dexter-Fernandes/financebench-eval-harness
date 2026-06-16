@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import struct
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Protocol
 from urllib import request
 from urllib.error import HTTPError, URLError
+
+logger = logging.getLogger(__name__)
 
 import yaml
 
@@ -96,24 +99,53 @@ class OllamaEmbeddingClient:
         if not texts:
             return []
         base_url = (self.config.base_url or "http://localhost:11434").rstrip("/")
-        payload: dict[str, Any] = {
-            "model": self.config.model_name,
-            "input": texts,
-        }
-        response = self._transport(
-            f"{base_url}/api/embed",
-            payload,
-            self.config.timeout_seconds,
-        )
-        error = response.get("error")
-        if isinstance(error, str) and error.strip():
-            raise EmbeddingProviderError(f"Ollama embedding request failed: {error}")
-        embeddings = response.get("embeddings")
-        if not isinstance(embeddings, list):
-            raise EmbeddingProviderError(
-                "Ollama embed response missing 'embeddings' list"
+
+        def _do_embed(batch: list[str]) -> list[list[float]]:
+            payload: dict[str, Any] = {"model": self.config.model_name, "input": batch}
+            response = self._transport(
+                f"{base_url}/api/embed", payload, self.config.timeout_seconds
             )
-        return embeddings
+            error = response.get("error")
+            if isinstance(error, str) and error.strip():
+                raise EmbeddingProviderError(f"Ollama embedding request failed: {error}")
+            embeddings = response.get("embeddings")
+            if not isinstance(embeddings, list):
+                raise EmbeddingProviderError(
+                    "Ollama embed response missing 'embeddings' list"
+                )
+            return embeddings
+
+        try:
+            return _do_embed(texts)
+        except EmbeddingProviderError as exc:
+            # Some GGUF-quantized models (e.g. bge-m3) produce NaN in their
+            # output vectors for certain inputs. Ollama's Go JSON encoder then
+            # refuses to serialise the response. Fall back to one-at-a-time so
+            # only the bad chunk is affected, not the entire batch.
+            if "NaN" not in str(exc):
+                raise
+            logger.warning(
+                "[ollama/%s] Batch of %d failed (NaN in embeddings) — retrying one at a time",
+                self.config.model_name, len(texts),
+            )
+            dim = self.config.dimensions
+            results: list[list[float]] = []
+            for text in texts:
+                try:
+                    vec = _do_embed([text])[0]
+                    if dim is None:
+                        dim = len(vec)
+                    results.append(vec)
+                except EmbeddingProviderError as inner:
+                    if "NaN" not in str(inner):
+                        raise
+                    fallback_dim = dim or 1024
+                    logger.warning(
+                        "[ollama/%s] Single chunk still NaN — substituting zero vector (dim=%d)",
+                        self.config.model_name, fallback_dim,
+                    )
+                    results.append([0.0] * fallback_dim)
+            return results
 
 
 def _ollama_http_transport(
