@@ -2,62 +2,49 @@
 
 ## Current State
 
-- M6 complete on branch `M6` — PR not yet raised.
-- 835 tests pass, 2 skipped (Ollama integration tests).
-- Full pipeline operational through RAG evaluation (M5) and embedding comparison (M6).
-- No live `evidence_hit@10` results recorded yet — dry-run only.
+- M7 complete on branch `M7` — PR not yet raised.
+- 885 tests pass, 2 skipped (Ollama integration tests).
+- Full pipeline operational through hallucination and grounding analysis (M7).
+- No live grounding analysis run recorded yet — all M7 tests use mock data.
 
 ## Current Engineering Milestone
 
-**M6 complete: Embedding model comparison**
+**M7 complete: Hallucination and Grounding Analysis**
 
 ```bash
-# Full run (requires Ollama)
-python -m financebench_eval compare-embeddings \
-  --config configs/embedding_comparison.yaml
+# Run grounding analysis on a completed RAG run
+# (update run_dir in configs/grounding_analysis.yaml first)
+python -m financebench_eval analyze-grounding \
+  --config configs/grounding_analysis.yaml
 
-# Dry-run (no Ollama needed, writes stub report)
-python -m financebench_eval compare-embeddings \
-  --config configs/embedding_comparison.yaml --dry-run
+# Inspect one question's failure details
+python -m financebench_eval inspect-failure \
+  --run runs/<run_id> --question-id financebench_001
 ```
 
 Output layout:
 ```
-runs/embedding_comparison/<run_id>/
-  config.yaml                     ← corpus_hash + fixed settings snapshot
-  model_runs/
-    nomic-embed-text/
-      retrieval_results.jsonl
-      retrieval_scores.jsonl
-      retrieval_summary.json
-    granite-embedding__278m/
-      retrieval_results.jsonl
-      retrieval_scores.jsonl
-      retrieval_summary.json
-  embedding_leaderboard.csv
-  embedding_leaderboard.json      ← sorted by evidence_hit@10
-  embedding_decision.json         ← role assignments
+runs/<run_id>/
+  grounding_scores.jsonl          ← per-question grounding label + rule flags
+  citation_scores.jsonl           ← citation quality per question
+  failure_analysis.jsonl          ← joined signals + root_cause per question
+  failure_summary.json            ← aggregate root cause counts
+  grounding_analysis_config.yaml  ← config snapshot
 
 reports/
-  embedding_comparison_<run_id>.md
+  hallucination_analysis_<run_id>.md
 ```
 
-Active candidate models in `configs/embedding_comparison.yaml`:
-- `nomic-embed-text` (ollama, 768-dim, local_baseline)
-- `granite-embedding:278m` (ollama, 768-dim, open_source)
-
-Commented-out candidates (ready to enable):
-- `bge-m3` — NaN issue with GGUF, fallback implemented
-- `mxbai-embed-large` — strong retrieval-focused model
-- `snowflake-arctic-embed:335m` — asymmetric retrieval specialist
-- `all-minilm` — fast floor baseline
+Config: `configs/grounding_analysis.yaml`
+- Set `grounding_analysis.run_dir` to the target RAG run directory
+- Set `grounding_judge.enabled: true` to activate LLM-as-judge (requires Ollama)
 
 ## Next Steps
 
-1. Raise M6 PR and merge to main.
-2. Run `compare-embeddings` with real data; record `evidence_hit@10` baseline.
-3. Optionally add `mxbai-embed-large` or `snowflake-arctic-embed:335m` for a stronger comparison.
-4. M7: use winning embedding model for a full RAG comparison (generation quality vs retrieval quality).
+1. Raise M7 PR and merge to main.
+2. Run `analyze-grounding` against a real RAG run; record root cause breakdown.
+3. Enable `grounding_judge` with a local Ollama model for richer per-example labels.
+4. Use failure analysis to guide M8 improvements (prompt tuning or retrieval improvements).
 
 ---
 
