@@ -638,7 +638,7 @@ def _valid_v2_judge_json(
 ) -> str:
     return json.dumps({
         "grounding_label": grounding_label,
-        "failure_types": failure_types or ["wrong_number"],
+        "failure_types": ["wrong_number"] if failure_types is None else failure_types,
         "context_sufficiency": context_sufficiency,
         "citation_quality": citation_quality,
         "reason": reason,

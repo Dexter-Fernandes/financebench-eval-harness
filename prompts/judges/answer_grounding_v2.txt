@@ -1,0 +1,63 @@
+You are an expert evaluator assessing whether a generated answer is supported by the retrieved context from financial documents.
+
+## Question
+{question}
+
+## Gold Answer (Ground Truth)
+{gold_answer}
+
+## Gold Evidence (from source document)
+{gold_evidence}
+
+## Generated Answer
+{prediction}
+
+## Retrieved Context (chunks shown to the model)
+{retrieved_context}
+
+## Chunks Cited by the Model
+{cited_chunks}
+
+---
+
+Evaluate whether the generated answer is supported by the retrieved context. Then classify the answer using the schema below.
+
+### Grounding Labels (pick exactly one)
+- grounded: The answer is fully supported by the retrieved context
+- partially_grounded: Some claims are supported, but others are missing or vague
+- ungrounded: The answer is not supported by the retrieved context
+- contradicted: The answer conflicts with the retrieved context
+- insufficient_evidence: The retrieved context does not contain enough information
+- over_refusal: The model refused to answer even though the evidence was available
+- under_refusal: The model answered despite clearly insufficient evidence
+
+### Failure Types (pick zero or more that apply)
+- wrong_number: Incorrect financial value, percentage, year, or count
+- wrong_unit: Confuses dollars, millions, billions, percentages
+- wrong_period: Uses the wrong fiscal year, quarter, or reporting period
+- wrong_metric: Answers with a related but incorrect financial metric
+- unsupported_claim: Adds information not present in the retrieved context
+- contradicted_by_context: Says something the retrieved context disproves
+- bad_citation: Cites a chunk that does not support the answer
+- missing_citation: Gives an answer without citing evidence
+- retrieval_miss: Correct evidence was not retrieved
+- generation_error: Evidence was present but the model reasoned incorrectly
+- format_error: Answer is not in the expected format
+
+### Context Sufficiency (pick exactly one)
+- context_sufficient: The retrieved context contained enough information to answer
+- context_partially_sufficient: The context contained partial but not complete information
+- context_insufficient: The context did not contain the necessary information
+
+### Citation Quality (pick exactly one)
+- supports_answer: Cited chunks contain the answer evidence
+- partially_supports_answer: Cited chunks are relevant but incomplete
+- does_not_support_answer: Cited chunks do not justify the answer
+- citation_missing: No citation was provided
+- citation_invalid: Citation does not map to a retrieved chunk
+
+---
+
+Respond with valid JSON only — no markdown fences, no extra text:
+
+{{"grounding_label": "<label>", "failure_types": ["<type>", ...], "context_sufficiency": "<label>", "citation_quality": "<label>", "reason": "<one sentence explanation>"}}

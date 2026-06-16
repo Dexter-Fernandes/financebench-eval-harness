@@ -138,6 +138,47 @@ def assign_failure_labels(row: dict[str, object], *, k: int = 5) -> list[str]:
     return labels
 
 
+def classify_root_cause(row: dict[str, object], *, k: int = 5) -> str:
+    """M7.11: deterministic 6-case root cause hierarchy.
+
+    Uses fields produced by join_all_signals() / failure_analysis rows.
+    """
+    evidence_hit = row.get(f"evidence_hit@{k}")
+    answer_verdict = row.get("answer_verdict")
+    citation_quality = row.get("citation_quality")
+    context_sufficiency = row.get("context_sufficiency")
+    grounding_label = row.get("grounding_label")
+
+    answer_correct = answer_verdict in ("correct", "partially_correct")
+    answer_wrong = not answer_correct
+
+    # 5. Context insufficient but model answered anyway → hallucination_under_refusal
+    # (checked before rule 1 because under_refusal label is the definitive signal)
+    if grounding_label == "under_refusal":
+        return "hallucination_under_refusal"
+
+    # 6. Context sufficient but model refused → over_refusal
+    if grounding_label == "over_refusal":
+        return "over_refusal"
+    if answer_verdict == "not_answered" and context_sufficiency == "context_sufficient":
+        return "over_refusal"
+
+    # 1. Retrieval miss → retrieval_failure
+    if evidence_hit is False:
+        return "retrieval_failure"
+
+    # 3. Answer correct but citation bad → citation_failure
+    if answer_correct and citation_quality in ("citation_invalid", "does_not_support_answer"):
+        return "citation_failure"
+
+    # 2. Evidence present but answer wrong → generation_failure
+    if evidence_hit is True and answer_wrong:
+        return "generation_failure"
+
+    # 4. No failure
+    return "no_failure"
+
+
 def summarize_joined_metrics(rows: list[dict[str, object]]) -> dict[str, object]:
     example_count = len(rows)
     summary: dict[str, object] = {"example_count": example_count}
@@ -168,6 +209,7 @@ def summarize_joined_metrics(rows: list[dict[str, object]]) -> dict[str, object]
 __all__ = [
     "assign_failure_labels",
     "categorize_join_row",
+    "classify_root_cause",
     "join_retrieval_and_answer_scores",
     "summarize_joined_metrics",
 ]

@@ -1,0 +1,24 @@
+grounding_analysis:
+  # Path to a completed RAG run directory (must contain rag_predictions.jsonl)
+  run_dir: runs/placeholder_run_id
+  # Optional: path to retrieval_scores.jsonl for evidence_hit@k fields
+  retrieval_results_path: null
+  # Optional: path to processed examples for company/question_type metadata
+  examples_path: null
+  # Output directory (defaults to run_dir if null)
+  output_dir: null
+  # Retrieval depth for evidence_hit@k evaluation
+  k: 5
+
+grounding_judge:
+  enabled: false
+  provider: ollama
+  model_name: llama3.2:3b
+  temperature: 0.0
+  max_tokens: 512
+  timeout_seconds: 90
+  base_url: http://localhost:11434
+  prompt:
+    id: answer_grounding_v2
+    version: v2
+    template_path: prompts/judges/answer_grounding_v2.txt
