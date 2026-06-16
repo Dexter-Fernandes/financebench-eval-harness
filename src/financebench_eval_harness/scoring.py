@@ -4,6 +4,11 @@ import re
 
 
 _NUMERIC_PATTERN = re.compile(r"\(?-?\$?\d[\d,]*(?:\.\d+)?\)?%?")
+_FISCAL_YEAR_PATTERN = re.compile(
+    r"\bFY\s?(\d{4})\b|\bfiscal\s+year\s+(\d{4})\b",
+    re.IGNORECASE,
+)
+_QUARTER_PATTERN = re.compile(r"\bQ([1-4])\s+(\d{4})\b", re.IGNORECASE)
 _SCORE_KEYS = (
     "exact_match",
     "normalized_string_match",
@@ -34,6 +39,25 @@ _UNIT_VALUE_PATTERN = re.compile(
     r"(%|(?:\s+(?:" + _UNIT_WORD_ALT + r")))?",
     re.IGNORECASE,
 )
+
+
+def extract_fiscal_periods(text: str) -> list[str]:
+    """Extract fiscal year and quarter strings, normalized, deduped, ordered."""
+    seen: set[str] = set()
+    results: list[str] = []
+    for match in _FISCAL_YEAR_PATTERN.finditer(text):
+        year = match.group(1) or match.group(2)
+        period = f"FY{year}"
+        if period not in seen:
+            seen.add(period)
+            results.append(period)
+    for match in _QUARTER_PATTERN.finditer(text):
+        q, year = match.group(1), match.group(2)
+        period = f"Q{q}_{year}"
+        if period not in seen:
+            seen.add(period)
+            results.append(period)
+    return results
 
 
 def extract_numeric_values(text: str) -> list[float]:
@@ -164,6 +188,7 @@ def _normalize_numeric_token(raw_value: str) -> float | None:
 
 
 __all__ = [
+    "extract_fiscal_periods",
     "extract_numeric_values",
     "extract_numeric_with_unit",
     "score_prediction",
