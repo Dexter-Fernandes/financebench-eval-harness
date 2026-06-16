@@ -17,6 +17,7 @@ def generate_embedding_comparison_report(
     run_dir: Path,
     *,
     output_dir: Path,
+    dry_run: bool = False,
 ) -> Path:
     """Generate a Markdown comparison report from a completed comparison run.
 
@@ -43,7 +44,7 @@ def generate_embedding_comparison_report(
 
     run_id: str = config_snapshot.get("run_id", run_dir.name)
     report_path = output_dir / f"embedding_comparison_{run_id}.md"
-    content = _render_report(run_id, leaderboard, decision, config_snapshot)
+    content = _render_report(run_id, leaderboard, decision, config_snapshot, dry_run=dry_run)
     report_path.write_text(content, encoding="utf-8")
     return report_path
 
@@ -58,6 +59,8 @@ def _render_report(
     leaderboard: list[dict],
     decision: dict,
     config: dict,
+    *,
+    dry_run: bool = False,
 ) -> str:
     lines: list[str] = []
 
@@ -67,6 +70,14 @@ def _render_report(
         f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
         "",
     ]
+
+    if dry_run:
+        lines += [
+            "> **DRY RUN** — no embeddings were computed. "
+            "Leaderboard and decision sections are empty. "
+            "Re-run without `--dry-run` to populate results.",
+            "",
+        ]
 
     # --- Experiment goal ---
     lines += [

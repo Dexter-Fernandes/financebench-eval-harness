@@ -154,6 +154,7 @@ def load_embedding_comparison_config(path: str | Path) -> EmbeddingComparisonCon
         index_base_dir=Path(cmp.get("index_base_dir", "data/indexes/financebench")),
         cache_dir=Path(cmp.get("cache_dir", "data/cache/embeddings")),
         fail_fast=bool(cmp.get("fail_fast", False)),
+        run_rag=bool(cmp.get("run_rag", False)),
     )
 
 

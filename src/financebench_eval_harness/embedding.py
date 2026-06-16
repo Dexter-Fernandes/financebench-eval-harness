@@ -10,9 +10,9 @@ from typing import Any, Callable, Protocol
 from urllib import request
 from urllib.error import HTTPError, URLError
 
-logger = logging.getLogger(__name__)
-
 import yaml
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)

@@ -1256,16 +1256,47 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
 
         if args.dry_run:
+            import yaml as _yaml
             print(f"[dry-run] {len(cmp_config.embedding_models)} models to compare:")
             for spec in cmp_config.embedding_models:
                 print(f"  {spec.provider}/{spec.name} ({spec.category})")
             print(f"[dry-run] Fixed chunks: {cmp_config.retrieval.chunks_path}")
             print(f"[dry-run] top_k={cmp_config.retrieval.top_k}")
+            # Write stub run dir so the report generator has something to read.
+            dry_run_dir = cmp_config.runs_dir / cmp_config.run_id
+            dry_run_dir.mkdir(parents=True, exist_ok=True)
+            (dry_run_dir / "embedding_leaderboard.json").write_text("[]", encoding="utf-8")
+            (dry_run_dir / "embedding_decision.json").write_text("{}", encoding="utf-8")
+            (dry_run_dir / "config.yaml").write_text(
+                _yaml.dump({
+                    "run_id": cmp_config.run_id,
+                    "dry_run": True,
+                    "chunks_path": str(cmp_config.retrieval.chunks_path),
+                    "questions_path": str(cmp_config.retrieval.questions_path),
+                    "top_k": cmp_config.retrieval.top_k,
+                    "evidence_overlap_threshold": cmp_config.retrieval.evidence_overlap_threshold,
+                    "embedding_models": [
+                        {"name": s.name, "provider": s.provider, "category": s.category}
+                        for s in cmp_config.embedding_models
+                    ],
+                }),
+                encoding="utf-8",
+            )
+            try:
+                from financebench_eval_harness.embedding_comparison_report import (
+                    generate_embedding_comparison_report,
+                )
+                report_path = generate_embedding_comparison_report(
+                    dry_run_dir, output_dir=args.report_dir, dry_run=True
+                )
+                print(f"[dry-run] Report:   {report_path}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[dry-run] Warning: report generation failed: {exc}", file=sys.stderr)
             return 0
 
         result = _run_embedding_comparison_with_progress(cmp_config, run_embedding_comparison)
 
-        _print_comparison_summary(result)
+        _print_comparison_summary(result, top_k=cmp_config.retrieval.top_k)
 
         try:
             from financebench_eval_harness.embedding_comparison_report import (
@@ -1492,7 +1523,7 @@ def _run_embedding_comparison_with_progress(cmp_config, run_embedding_comparison
         return run_embedding_comparison(cmp_config, on_event=on_event)
 
 
-def _print_comparison_summary(result) -> None:
+def _print_comparison_summary(result, *, top_k: int = 10) -> None:
     """Print post-run summary table."""
     try:
         from rich import box
@@ -1519,7 +1550,7 @@ def _print_comparison_summary(result) -> None:
     for mr in result.model_results:
         spec = mr.spec
         if mr.succeeded:
-            hit = mr.summary.get("evidence_text_hit@10_rate", 0.0) if mr.summary else 0.0
+            hit = mr.summary.get(f"evidence_text_hit@{top_k}_rate", 0.0) if mr.summary else 0.0
             latency = f"{mr.embedding_latency_s:.1f}s" if mr.embedding_latency_s else "cached"
             cost = f"${mr.estimated_cost_usd:.4f}" if mr.estimated_cost_usd else "free"
             table.add_row(spec.name, spec.provider, spec.category, f"{hit:.3f}", latency, cost)
