@@ -556,6 +556,46 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override run_dir from config (directory with rag_predictions.jsonl).",
     )
 
+    grounding_parser = subparsers.add_parser(
+        "analyze-grounding",
+        help="Run M7 hallucination and grounding analysis on a completed RAG run.",
+    )
+    grounding_parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("configs/grounding_analysis.yaml"),
+        help="Grounding analysis config YAML.",
+    )
+    grounding_parser.add_argument(
+        "--report-dir",
+        type=Path,
+        default=Path("reports"),
+        help="Directory for the generated Markdown report.",
+    )
+    grounding_parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Run ID for the report filename (inferred from run_dir if omitted).",
+    )
+
+    inspect_failure_parser = subparsers.add_parser(
+        "inspect-failure",
+        help="Inspect hallucination and grounding details for one question.",
+    )
+    inspect_failure_parser.add_argument(
+        "--run",
+        type=Path,
+        required=True,
+        metavar="RUN_DIR",
+        help="Path to the run directory containing grounding analysis outputs.",
+    )
+    inspect_failure_parser.add_argument(
+        "--question-id",
+        required=True,
+        metavar="QUESTION_ID",
+        help="Question ID to inspect.",
+    )
+
     cmp_parser = subparsers.add_parser(
         "compare-embeddings",
         help="Run retrieval comparison across multiple embedding models (M6).",
@@ -1310,6 +1350,56 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"Warning: report generation failed: {exc}", file=sys.stderr)
 
         return 0 if result.failed_count == 0 else 2
+
+    if args.command == "analyze-grounding":
+        from financebench_eval_harness.grounding_analysis import analyze_grounding
+        from financebench_eval_harness.grounding_analysis_config import (
+            GroundingAnalysisConfigError,
+            load_grounding_analysis_config,
+        )
+        from financebench_eval_harness.hallucination_report import generate_hallucination_report
+
+        try:
+            config = load_grounding_analysis_config(args.config)
+        except GroundingAnalysisConfigError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        print(f"Analyzing grounding for run: {config.settings.run_dir}")
+        try:
+            result = analyze_grounding(config)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Grounding analysis failed: {exc}", file=sys.stderr)
+            return 1
+
+        run_id = args.run_id or config.settings.run_dir.name
+        print(f"Grounding scores:  {result.grounding_scores_path}")
+        print(f"Citation scores:   {result.citation_scores_path}")
+        print(f"Failure analysis:  {result.failure_analysis_path}")
+        print(f"Failure summary:   {result.failure_summary_path}")
+
+        try:
+            report_result = generate_hallucination_report(
+                result.failure_analysis_path,
+                result.failure_summary_path,
+                run_id=run_id,
+                output_dir=args.report_dir,
+            )
+            print(f"Report:            {report_result.report_path}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: report generation failed: {exc}", file=sys.stderr)
+
+        return 0
+
+    if args.command == "inspect-failure":
+        from financebench_eval_harness.failure_inspector import (
+            format_failure_inspection,
+            load_failure_inspection,
+        )
+
+        result = load_failure_inspection(args.run, args.question_id)
+        print(format_failure_inspection(result))
+        return 0
 
     parser.error(f"Unknown command: {args.command}")
     return 2
