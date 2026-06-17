@@ -336,6 +336,50 @@ python -m financebench_eval compare-embeddings \
 `config_templates/` has annotated starter configs with `# FILL:` markers for
 each pipeline stage.
 
+### Generate reports
+
+```bash
+# Baseline evaluation report
+python -m financebench_eval generate-report \
+  --type baseline \
+  --run runs/<run_id>
+
+# End-to-end RAG evaluation report
+python -m financebench_eval generate-report \
+  --type rag \
+  --run runs/<run_id>
+
+# Grounding and hallucination analysis report
+python -m financebench_eval generate-report \
+  --type grounding \
+  --run runs/<run_id>
+
+# Portfolio-friendly experiment summary (also writes summary_metrics.json + failure_breakdown.csv)
+python -m financebench_eval generate-report \
+  --type experiment-summary \
+  --run runs/<run_id>
+
+# Compare multiple runs side by side
+python -m financebench_eval compare-runs \
+  --runs runs/run_a runs/run_b runs/run_c \
+  --output reports/run_comparison.md
+```
+
+---
+
+## Example Reports
+
+Generated reports live in `reports/`. Representative examples from local runs:
+
+- **Baseline** — `reports/baseline_<run_id>.md` — closed-book accuracy, latency, failure examples
+- **Retrieval** — `reports/retrieval_eval_<run_id>.md` — doc/page/evidence hit@k, MRR, failure labels
+- **RAG** — `reports/rag_eval_<run_id>.md` — answer accuracy, grounding, retrieval correlation
+- **Embedding comparison** — `reports/embedding_comparison_<run_id>.md` — model leaderboard, cost/latency
+- **Hallucination analysis** — `reports/hallucination_analysis_<run_id>.md` — root cause breakdown
+- **Experiment summary** — `reports/experiment_summary_<run_id>.md` — full project one-pager
+
+Machine-readable exports (`summary_metrics.json`, `failure_breakdown.csv`, `leaderboard.csv`) are written to the run directory when generating an experiment-summary report.
+
 ---
 
 ## Project Status
@@ -348,7 +392,7 @@ each pipeline stage.
 | RAG generation + scoring | M5 | Complete |
 | Embedding model comparison | M6 | Complete |
 | Grounding and hallucination analysis | M7 | Complete |
-| Prompt and retrieval improvements | M8 | Planned |
+| Experiment reporting | M8 | Complete |
 
 Public FinanceBench sample only. Results in `reports/` are local experiment
 artefacts, not published benchmark claims.
