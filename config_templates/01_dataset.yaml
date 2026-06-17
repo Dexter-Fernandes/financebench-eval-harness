@@ -1,0 +1,15 @@
+# Step 1: Dataset — load and process raw FinanceBench data
+# Command: python -m financebench_eval load-dataset --config config_templates/01_dataset.yaml
+
+dataset:
+  name: financebench
+
+  # FILL: path to the raw questions JSONL downloaded from FinanceBench
+  questions_path: data/raw/financebench/questions.jsonl
+
+  # FILL: directory containing the source PDF files referenced by each question
+  documents_dir: data/raw/financebench/documents
+
+  # FILL: directory where processed pages and examples will be written
+  #   outputs: pages.jsonl, examples.jsonl
+  processed_dir: data/processed/financebench

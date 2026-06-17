@@ -39,12 +39,12 @@ comparison:
     #   batch_size: 32
     #   category: open_source
 
-    # - name: all-minilm
-    #   provider: ollama
-    #   dimensions: 384
-    #   normalize: true
-    #   batch_size: 64
-    #   category: local_baseline
+    - name: qwen3-embedding:0.6b
+      provider: ollama
+      dimensions: 1024
+      normalize: true
+      batch_size: 32
+      category: open_source
 
     # - name: mxbai-embed-large
     #   provider: ollama
@@ -53,12 +53,12 @@ comparison:
     #   batch_size: 32
     #   category: open_source
 
-    # - name: snowflake-arctic-embed:335m
-    #   provider: ollama
-    #   dimensions: 1024
-    #   normalize: true
-    #   batch_size: 32
-    #   category: open_source
+    - name: snowflake-arctic-embed:335m
+      provider: ollama
+      dimensions: 1024
+      normalize: true
+      batch_size: 32
+      category: open_source
 
     - name: granite-embedding:278m
       provider: ollama
