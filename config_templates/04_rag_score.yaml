@@ -1,0 +1,61 @@
+# Step 4: RAG scoring — judge answer correctness and grounding for a completed RAG run
+# Command: python -m financebench_eval score-rag --config config_templates/04_rag_score.yaml
+
+rag_score:
+  # FILL: path to the run directory produced by run-rag (step 3)
+  #   must contain rag_predictions.jsonl
+  #   e.g. runs/20260615T124243Z
+  run_dir: runs/<timestamp>
+
+  # FILL (optional): path to retrieval_results.jsonl from the retrieve step (step 2)
+  #   needed for grounding judge to compare predicted chunks against retrieved ones
+  #   e.g. runs/run_001/retrieval_results.jsonl
+  retrieval_results_path: null
+
+  # Output directory for scored files — leave null to write into run_dir
+  output_dir: null
+
+  # Must match the top_k used in the retrieval step
+  k: 5
+
+answer_judge:
+  # Set to false to skip LLM-based answer scoring (uses lexical match only)
+  enabled: true
+
+  # FILL: judge LLM provider
+  provider: ollama
+
+  # FILL: judge model name
+  model_name: llama3.2:3b
+
+  temperature: 0.0
+  max_tokens: 256
+  timeout_seconds: 60
+
+  # FILL (ollama only): base URL of the running Ollama server
+  base_url: http://localhost:11434
+
+  prompt:
+    id: answer_correctness_v2
+    version: v2
+    template_path: prompts/judges/answer_correctness_v2.txt
+
+grounding_judge:
+  # Set to false to skip grounding evaluation
+  enabled: true
+
+  # FILL: judge LLM provider (can be the same model as answer_judge)
+  provider: ollama
+
+  # FILL: judge model name
+  model_name: llama3.2:3b
+
+  temperature: 0.0
+  max_tokens: 256
+  timeout_seconds: 60
+  base_url: http://localhost:11434
+
+  prompt:
+    id: answer_grounding_v1
+    version: v1
+    template_path: prompts/judges/answer_grounding_v1.txt

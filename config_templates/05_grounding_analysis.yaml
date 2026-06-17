@@ -1,0 +1,50 @@
+# Step 5: Grounding analysis — hallucination detection, citation checking, root cause classification
+# Command: python -m financebench_eval analyze-grounding --config config_templates/05_grounding_analysis.yaml
+#
+# Prerequisite: a completed score-rag run (step 4) that produced rag_predictions.jsonl
+
+grounding_analysis:
+  # FILL: path to the run directory from score-rag (step 4)
+  #   must contain rag_predictions.jsonl
+  #   optionally also rag_grounding_scores.jsonl and rag_answer_scores.jsonl
+  #   e.g. runs/20260615T124243Z
+  run_dir: runs/<timestamp>
+
+  # FILL (optional): path to retrieval_scores.jsonl from the retrieve step (step 2)
+  #   enables evidence_hit@k fields in the failure analysis
+  #   e.g. runs/run_001/retrieval_scores.jsonl
+  retrieval_results_path: null
+
+  # FILL (optional): path to examples.jsonl from step 1
+  #   enables company and question_type slicing in the report
+  #   e.g. data/processed/financebench/examples.jsonl
+  examples_path: null
+
+  # Output directory for analysis files — leave null to write into run_dir
+  output_dir: null
+
+  # Must match the top_k used in retrieval and scoring steps
+  k: 5
+
+grounding_judge:
+  # Set to true to call an LLM for richer grounding labels per example
+  # Requires Ollama running: ollama serve && ollama pull <model_name>
+  enabled: false
+
+  # FILL: judge LLM provider — "ollama" is the only supported local option
+  provider: ollama
+
+  # FILL: model name — smaller models (3b) are fast; larger (8b+) are more accurate
+  model_name: llama3.2:3b
+
+  temperature: 0.0
+  max_tokens: 512
+  timeout_seconds: 90
+
+  # FILL (ollama only): base URL of the running Ollama server
+  base_url: http://localhost:11434
+
+  prompt:
+    id: answer_grounding_v2
+    version: v2
+    template_path: prompts/judges/answer_grounding_v2.txt

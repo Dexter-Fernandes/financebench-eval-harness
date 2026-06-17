@@ -1,0 +1,60 @@
+# Step 2: Retrieval — chunk documents, build FAISS index, retrieve top-k chunks
+# Commands (run in order):
+#   python -m financebench_eval chunk-documents --config config_templates/02_retrieval.yaml
+#   python -m financebench_eval build-index     --config config_templates/02_retrieval.yaml --progress
+#   python -m financebench_eval retrieve        --config config_templates/02_retrieval.yaml --run-id <run_id>
+
+retrieval:
+  # FILL: path to pages.jsonl produced by step 1 (load-dataset)
+  pages_path: data/processed/financebench/pages.jsonl
+
+  # FILL: path where chunked text will be written (created by chunk-documents)
+  chunks_path: data/processed/financebench/chunks.jsonl
+
+  # FILL: directory where the FAISS index will be stored (created by build-index)
+  index_dir: data/indexes/financebench
+
+  # FILL: path to examples.jsonl produced by step 1 (questions + gold answers)
+  questions_path: data/processed/financebench/examples.jsonl
+
+  # FILL: directory where per-run retrieval results will be written
+  runs_dir: runs
+
+  # How many chunks to retrieve per question (used by score-retrieval and downstream)
+  top_k: 5
+
+  # Minimum text overlap (0.0–1.0) to count a chunk as an evidence hit
+  evidence_overlap_threshold: 0.5
+
+  # Rank at or above which a retrieval result is considered "good"
+  good_rank_threshold: 3
+
+  chunking:
+    strategy: recursive_text
+
+    # FILL: target size of each chunk in characters
+    chunk_size: 800
+
+    # Overlap between adjacent chunks in characters
+    chunk_overlap: 150
+
+    # Chunks shorter than this are dropped
+    min_chunk_chars: 100
+
+  embedding:
+    # FILL: embedding provider — "ollama" (local) or "openai" / "voyageai" (API)
+    provider: ollama
+
+    # FILL: model name for the chosen provider
+    #   ollama examples: nomic-embed-text, mxbai-embed-large, granite-embedding:278m
+    #   openai examples: text-embedding-3-small, text-embedding-3-large
+    model_name: nomic-embed-text
+
+    # FILL (ollama only): base URL of the running Ollama server
+    base_url: http://localhost:11434
+
+    # Seconds before an embedding request times out
+    timeout_seconds: 30.0
+
+    # Texts embedded per API call — lower if you hit OOM or rate limits
+    batch_size: 128
