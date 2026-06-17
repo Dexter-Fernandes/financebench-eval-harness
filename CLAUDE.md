@@ -9,11 +9,11 @@ Run relevant pytest smoke tests before committing.
 
 ## M6 Workflow
 
-Follow `docs/M7_spec.md` for all M6 implementation work.
+Follow `docs/M8_spec.md` for all M6 implementation work.
 
 Invoke `/tdd` at the very start before any implementation begins.
 
-After completing each M7.x sub-milestone:
+After completing each M8.x sub-milestone:
 1. Stage relevant changed files with `git add`
 2. Invoke `/git-pre-commit` to generate the commit message
 3. Use only the first line of the output (the commit subject — not the body or description)
