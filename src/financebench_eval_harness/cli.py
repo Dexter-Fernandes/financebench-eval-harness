@@ -619,6 +619,55 @@ def build_parser() -> argparse.ArgumentParser:
         help="Validate config and list models without running embeddings.",
     )
 
+    # M8.13: unified generate-report command
+    gen_report_parser = subparsers.add_parser(
+        "generate-report",
+        help="Generate a report from a completed evaluation run (M8).",
+    )
+    gen_report_parser.add_argument(
+        "--type",
+        dest="report_type",
+        choices=["baseline", "retrieval", "rag", "grounding", "experiment-summary"],
+        required=True,
+        help="Type of report to generate.",
+    )
+    gen_report_parser.add_argument(
+        "--run",
+        type=Path,
+        required=True,
+        help="Path to the run directory.",
+    )
+    gen_report_parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("reports"),
+        help="Output directory for the generated report.",
+    )
+
+    # M8.14: compare multiple runs side by side
+    cmp_runs_parser = subparsers.add_parser(
+        "compare-runs",
+        help="Compare multiple evaluation runs side by side (M8).",
+    )
+    cmp_runs_parser.add_argument(
+        "--runs",
+        type=Path,
+        nargs="+",
+        required=True,
+        help="Two or more run directories to compare.",
+    )
+    cmp_runs_parser.add_argument(
+        "--metric",
+        default="evidence_text_hit@10_rate",
+        help="Primary metric to sort by (default: evidence_text_hit@10_rate).",
+    )
+    cmp_runs_parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("reports/run_comparison.md"),
+        help="Output path for the comparison Markdown report.",
+    )
+
     return parser
 
 
@@ -1401,8 +1450,212 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(format_failure_inspection(result))
         return 0
 
+    if args.command == "generate-report":
+        return _cmd_generate_report(args)
+
+    if args.command == "compare-runs":
+        return _cmd_compare_runs(args)
+
     parser.error(f"Unknown command: {args.command}")
     return 2
+
+
+def _cmd_generate_report(args) -> int:
+    """M8.13: Generate a report from a completed run directory."""
+    import warnings
+
+    from financebench_eval_harness.report_loader import ReportLoadError, load_run_data
+
+    run_dir = Path(args.run)
+    if not run_dir.is_dir():
+        print(f"Run directory not found: {run_dir}", file=sys.stderr)
+        return 1
+
+    output_dir = Path(args.output)
+    report_type = args.report_type
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        try:
+            run_data = load_run_data(run_dir)
+        except ReportLoadError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+    for w in caught:
+        print(f"Warning: {w.message}", file=sys.stderr)
+
+    if report_type == "baseline":
+        from financebench_eval_harness.report import (
+            BaselineReportError,
+            generate_baseline_report,
+        )
+        try:
+            result = generate_baseline_report(run_dir, output_dir=output_dir)
+        except BaselineReportError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(f"Baseline report: {result.report_path}")
+        print(f"Questions evaluated: {result.evaluated_count}")
+        return 0
+
+    if report_type == "retrieval":
+        from financebench_eval_harness.eval_retrieval import generate_retrieval_report
+
+        ret_summary_path = run_dir / "retrieval_summary.json"
+        if not ret_summary_path.is_file():
+            print(f"retrieval_summary.json not found in {run_dir}", file=sys.stderr)
+            return 1
+        summary = json.loads(ret_summary_path.read_text(encoding="utf-8"))
+
+        class _MinConfig:
+            top_k = 10
+            embedding_model = run_data.config.get("embedding_model", "unknown") if run_data.config else "unknown"
+            chunk_size = 800
+            chunk_overlap = 150
+            runs_dir = run_dir.parent
+            questions_path = Path("data/processed/financebench/examples.jsonl")
+
+        report_path = generate_retrieval_report(
+            summary, run_data.run_id, _MinConfig(), output_dir=output_dir, run_dir=run_dir
+        )
+        print(f"Retrieval report: {report_path}")
+        return 0
+
+    if report_type == "rag":
+        from financebench_eval_harness.rag_report import RagReportError, generate_rag_report
+
+        joined_dir = run_dir / "joined"
+        if not joined_dir.is_dir():
+            print(f"joined/ directory not found in {run_dir}", file=sys.stderr)
+            return 1
+        try:
+            result = generate_rag_report(
+                joined_dir,
+                rag_run_dir=run_dir,
+                retrieval_summary_path=run_dir / "retrieval_summary.json",
+                output_dir=output_dir,
+                run_id=run_data.run_id,
+            )
+        except RagReportError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(f"RAG report: {result.report_path}")
+        print(f"Questions evaluated: {result.example_count}")
+        return 0
+
+    if report_type == "grounding":
+        from financebench_eval_harness.hallucination_report import generate_hallucination_report
+
+        fa_path = run_dir / "failure_analysis.jsonl"
+        fs_path = run_dir / "failure_summary.json"
+        if not fa_path.is_file():
+            print(f"failure_analysis.jsonl not found in {run_dir}", file=sys.stderr)
+            return 1
+        result = generate_hallucination_report(
+            fa_path, fs_path, run_id=run_data.run_id, output_dir=output_dir
+        )
+        print(f"Grounding report: {result.report_path}")
+        return 0
+
+    if report_type == "experiment-summary":
+        from financebench_eval_harness.experiment_summary_report import (
+            generate_experiment_summary_report,
+        )
+        from financebench_eval_harness.report_exports import (
+            export_failure_breakdown_csv,
+            export_summary_metrics,
+        )
+
+        report_path = generate_experiment_summary_report(run_data, output_dir=output_dir)
+        print(f"Experiment summary: {report_path}")
+
+        metrics_path = export_summary_metrics(run_data, output_dir=run_dir)
+        print(f"Summary metrics:    {metrics_path}")
+
+        csv_path = export_failure_breakdown_csv(run_data, output_dir=run_dir)
+        print(f"Failure breakdown:  {csv_path}")
+        return 0
+
+    print(f"Unknown report type: {report_type}", file=sys.stderr)
+    return 1
+
+
+def _cmd_compare_runs(args) -> int:
+    """M8.14: Compare multiple runs side by side."""
+    import warnings
+
+    from financebench_eval_harness.report_loader import load_run_data
+
+    run_dirs: list[Path] = [Path(r) for r in args.runs]
+    metric: str = args.metric
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    rows: list[dict] = []
+    for run_dir in run_dirs:
+        if not run_dir.is_dir():
+            print(f"Run directory not found: {run_dir}", file=sys.stderr)
+            continue
+        with warnings.catch_warnings(record=True):
+            warnings.simplefilter("always")
+            run_data = load_run_data(run_dir)
+
+        meta = run_data.run_metadata or {}
+        ret = run_data.retrieval_summary or {}
+        judge = meta.get("judge_summary") or {}
+
+        row: dict = {
+            "run_id": run_data.run_id,
+            "mode": meta.get("mode", "—"),
+            "model": meta.get("model_name", "—"),
+            "embedding": (run_data.config or {}).get("embedding_model", "—"),
+        }
+        if judge.get("attempted_count"):
+            n = judge["attempted_count"]
+            row["accuracy"] = f"{judge.get('correct_count', 0) / n:.2f}"
+        else:
+            row["accuracy"] = "—"
+
+        row["evidence_hit@10"] = _fmt_metric(ret.get("evidence_text_hit@10_rate"))
+        row["doc_hit@10"] = _fmt_metric(ret.get("doc_hit@10_rate"))
+        row["mrr@10"] = _fmt_metric(ret.get("mrr@10"))
+        row["_sort_key"] = ret.get(metric) or 0.0
+        rows.append(row)
+
+    rows.sort(key=lambda r: r["_sort_key"], reverse=True)
+    best_run = rows[0]["run_id"] if rows else None
+
+    lines: list[str] = [
+        "# Run Comparison",
+        "",
+        f"Sorted by: `{metric}`",
+        "",
+    ]
+    if best_run:
+        lines += [f"**Best run:** `{best_run}`", ""]
+
+    if rows:
+        cols = ["run_id", "mode", "model", "accuracy", "evidence_hit@10", "doc_hit@10", "mrr@10"]
+        lines.append("| " + " | ".join(cols) + " |")
+        lines.append("| " + " | ".join("---" for _ in cols) + " |")
+        for row in rows:
+            marker = " ★" if row["run_id"] == best_run else ""
+            line_cols = [f"{row.get(c, '—')}{marker if c == 'run_id' else ''}" for c in cols]
+            lines.append("| " + " | ".join(line_cols) + " |")
+        lines.append("")
+
+    output_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    print(f"Comparison report: {output_path}")
+    return 0
+
+
+def _fmt_metric(value) -> str:
+    if value is None:
+        return "—"
+    if isinstance(value, float):
+        return f"{value:.3f}"
+    return str(value)
 
 
 def _add_dataset_path_arguments(parser: argparse.ArgumentParser) -> None:
