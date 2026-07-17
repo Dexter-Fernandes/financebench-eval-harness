@@ -1,0 +1,7 @@
+reranker:
+  provider: http
+  model_name: bge-reranker-base
+  base_url: http://localhost:8000
+  timeout_seconds: 30.0
+  batch_size: 16
+  top_n: 20

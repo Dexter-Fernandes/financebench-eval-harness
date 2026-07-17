@@ -1,0 +1,3 @@
+reranker:
+  provider: mock
+  model_name: mock-reranker
