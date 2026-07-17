@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,9 +30,12 @@ class RetrievedChunk:
     page_num: int
     score: float
     text: str
+    dense_rank: int | None = None
+    lexical_rank: int | None = None
+    rerank_score: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "rank": self.rank,
             "chunk_id": self.chunk_id,
             "doc_name": self.doc_name,
@@ -41,6 +43,13 @@ class RetrievedChunk:
             "score": self.score,
             "text": self.text,
         }
+        if self.dense_rank is not None:
+            d["dense_rank"] = self.dense_rank
+        if self.lexical_rank is not None:
+            d["lexical_rank"] = self.lexical_rank
+        if self.rerank_score is not None:
+            d["rerank_score"] = self.rerank_score
+        return d
 
 
 @dataclass(frozen=True)
@@ -67,6 +76,9 @@ class RetrievalRunMetadata:
     chunk_size: int | None
     chunk_overlap: int | None
     top_k: int
+    retrieval_mode: str = "dense"
+    fusion: dict[str, Any] | None = None
+    reranker: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -78,6 +90,9 @@ class RetrievalRunMetadata:
             "chunk_size": self.chunk_size,
             "chunk_overlap": self.chunk_overlap,
             "top_k": self.top_k,
+            "retrieval_mode": self.retrieval_mode,
+            "fusion": self.fusion,
+            "reranker": self.reranker,
         }
 
 
@@ -137,39 +152,28 @@ def run_retrieval(
     chunks_path: str | Path | None = None,
     index_metadata: IndexMetadata | None = None,
 ) -> RetrievalRunResult:
-    """Run retrieval for all questions and write results to a JSONL file."""
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    """Run dense retrieval for all questions and write results to a JSONL file.
 
-    rows = retrieve_for_questions(questions, store, embedding_client, top_k=top_k)
+    Thin wrapper delegating to DenseRetriever + run_retrieval_with_retriever (M9.7).
+    """
+    # Local import: hybrid_retriever imports dataclasses from this module, so a
+    # module-level import here would create a circular import.
+    from financebench_eval_harness.hybrid_retriever import (
+        DenseRetriever,
+        run_retrieval_with_retriever,
+    )
 
-    with output_path.open("w", encoding="utf-8") as f:
-        for row in rows:
-            f.write(json.dumps(row.to_dict(), ensure_ascii=False) + "\n")
-
-    metadata_path: Path | None = None
-    if index_metadata is not None:
-        effective_run_id = run_id or _auto_run_id(index_metadata.embedding_model)
-        run_meta = RetrievalRunMetadata(
-            run_id=effective_run_id,
-            dataset_path=str(dataset_path) if dataset_path is not None else "",
-            chunks_path=str(chunks_path) if chunks_path is not None else "",
-            embedding_model=index_metadata.embedding_model,
-            vector_store="faiss",
-            chunk_size=index_metadata.chunk_size,
-            chunk_overlap=index_metadata.chunk_overlap,
-            top_k=top_k,
-        )
-        metadata_path = output_path.parent / _METADATA_FILE
-        metadata_path.write_text(
-            json.dumps(run_meta.to_dict(), indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-
-    return RetrievalRunResult(
-        question_count=len(rows),
-        output_path=output_path,
-        metadata_path=metadata_path,
+    retriever = DenseRetriever(store, embedding_client)
+    return run_retrieval_with_retriever(
+        questions,
+        retriever,
+        output_path,
+        top_k=top_k,
+        run_id=run_id,
+        dataset_path=dataset_path,
+        chunks_path=chunks_path,
+        index_metadata=index_metadata,
+        retrieval_mode="dense",
     )
 
 
