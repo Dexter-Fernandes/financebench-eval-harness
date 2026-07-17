@@ -18,3 +18,15 @@ evaluation:
         id: rag_no_context_v1
         version: v1
         template_path: prompts/rag/rag_no_context_v1.txt
+    rag_hybrid:
+      context_source: retrieved_chunks
+      prompt:
+        id: rag_hybrid_v1
+        version: v2
+        template_path: prompts/rag/rag_dense_v2.txt
+    rag_reranked:
+      context_source: retrieved_chunks
+      prompt:
+        id: rag_reranked_v1
+        version: v2
+        template_path: prompts/rag/rag_dense_v2.txt
