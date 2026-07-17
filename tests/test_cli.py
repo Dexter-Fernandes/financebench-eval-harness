@@ -1755,6 +1755,184 @@ def test_retrieve_command_auto_output_prints_run_dir(tmp_path: Path, capsys) -> 
 
 
 # ---------------------------------------------------------------------------
+# retrieve command — M9.8 mode wiring
+# ---------------------------------------------------------------------------
+
+
+def test_retrieve_command_hybrid_reranked_runs_end_to_end(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    output_path = tmp_path / "results.jsonl"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "retrieve",
+        "--index-dir", str(index_dir),
+        "--questions", str(questions_path),
+        "--embedding-config", str(embedding_cfg),
+        "--output", str(output_path),
+        "--mode", "hybrid_reranked",
+        "--reranker-config", "configs/reranker/mock.yaml",
+        "--candidate-k", "5",
+        "--fusion-k", "60",
+    ])
+
+    assert exit_code == 0
+    assert capsys.readouterr().err == ""
+    rows = _read_jsonl(output_path)
+    assert len(rows) == 2
+    assert all(len(row["retrieved"]) > 0 for row in rows)
+
+
+def test_retrieve_command_hybrid_mode_runs_end_to_end(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    output_path = tmp_path / "results.jsonl"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "retrieve",
+        "--index-dir", str(index_dir),
+        "--questions", str(questions_path),
+        "--embedding-config", str(embedding_cfg),
+        "--output", str(output_path),
+        "--mode", "hybrid",
+    ])
+
+    assert exit_code == 0
+    rows = _read_jsonl(output_path)
+    assert all("dense_rank" in row["retrieved"][0] or "lexical_rank" in row["retrieved"][0] for row in rows)
+
+
+def test_retrieve_command_lexical_mode_runs_end_to_end(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    output_path = tmp_path / "results.jsonl"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "retrieve",
+        "--index-dir", str(index_dir),
+        "--questions", str(questions_path),
+        "--embedding-config", str(embedding_cfg),
+        "--output", str(output_path),
+        "--mode", "lexical",
+    ])
+
+    assert exit_code == 0
+    rows = _read_jsonl(output_path)
+    assert all(len(row["retrieved"]) > 0 for row in rows)
+
+
+def test_retrieve_command_invalid_mode_gives_clear_error(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_embedding_config(embedding_cfg)
+
+    with pytest.raises(SystemExit):
+        main([
+            "retrieve",
+            "--index-dir", str(index_dir),
+            "--questions", str(questions_path),
+            "--embedding-config", str(embedding_cfg),
+            "--mode", "not_a_real_mode",
+        ])
+
+    assert "invalid choice" in capsys.readouterr().err
+
+
+def test_retrieve_command_hybrid_reranked_missing_reranker_config_gives_clear_error(
+    tmp_path: Path, capsys
+) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "retrieve",
+        "--index-dir", str(index_dir),
+        "--questions", str(questions_path),
+        "--embedding-config", str(embedding_cfg),
+        "--output", str(tmp_path / "results.jsonl"),
+        "--mode", "hybrid_reranked",
+    ])
+
+    assert exit_code == 1
+    assert "--reranker-config is required" in capsys.readouterr().err
+
+
+def test_retrieve_command_hybrid_reranked_then_eval_retrieval_shows_ndcg_keys(
+    tmp_path: Path, capsys
+) -> None:
+    from financebench_eval_harness.chunking import ChunkingConfig
+    from financebench_eval_harness.embedding import EmbeddingConfig
+    from financebench_eval_harness.eval_retrieval import score_retrieval_run
+    from financebench_eval_harness.pipeline_config import PipelineConfig
+
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    run_dir = tmp_path / "runs" / "run_001"
+    output_path = run_dir / "retrieval_results.jsonl"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "retrieve",
+        "--index-dir", str(index_dir),
+        "--questions", str(questions_path),
+        "--embedding-config", str(embedding_cfg),
+        "--output", str(output_path),
+        "--mode", "hybrid_reranked",
+        "--reranker-config", "configs/reranker/mock.yaml",
+    ])
+    assert exit_code == 0
+
+    gold_examples_path = tmp_path / "examples.jsonl"
+    _write_questions_jsonl(gold_examples_path, [
+        {
+            "question_id": "q001",
+            "evidence": [
+                {"doc_name": "ACME", "gold_page_num": 1, "matched_page_num": 1,
+                 "evidence_text": "Total revenue for fiscal year 2022 was $4.2 billion."},
+            ],
+        },
+        {
+            "question_id": "q002",
+            "evidence": [
+                {"doc_name": "ACME", "gold_page_num": 2, "matched_page_num": 2,
+                 "evidence_text": "Net income was $540 million, down 3% year over year."},
+            ],
+        },
+    ])
+
+    cfg = PipelineConfig(
+        pages_path=tmp_path / "pages.jsonl",
+        chunks_path=tmp_path / "chunks.jsonl",
+        index_dir=index_dir,
+        questions_path=gold_examples_path,
+        runs_dir=tmp_path / "runs",
+        top_k=5,
+        evidence_overlap_threshold=0.5,
+        chunking=ChunkingConfig(chunk_size=200, chunk_overlap=50, strategy="recursive_text", min_chunk_chars=10),
+        embedding=EmbeddingConfig(provider="mock", model_name="mock-embed"),
+    )
+    summary = score_retrieval_run(cfg, run_dir)
+    assert "doc_ndcg@5" in summary
+    assert "evidence_text_ndcg@5" in summary
+
+
+# ---------------------------------------------------------------------------
 # inspect-retrieval command helpers
 # ---------------------------------------------------------------------------
 

@@ -19,6 +19,14 @@ from financebench_eval_harness.embedding import (
     OllamaEmbeddingClient,
     load_embedding_config,
 )
+from financebench_eval_harness.reranker import (
+    HTTPRerankerClient,
+    LocalRerankerClient,
+    MockRerankerClient,
+    RerankerConfigError,
+    RerankerProviderError,
+    load_reranker_config,
+)
 from financebench_eval_harness.index_builder import IndexBuildError, build_index, load_index
 from financebench_eval_harness.query_embedder import QueryEmbeddingError, embed_question
 from financebench_eval_harness.pipeline_config import PipelineConfigError, load_pipeline_config
@@ -344,6 +352,30 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Path to the chunks JSONL used to build the index (recorded in run metadata).",
+    )
+    retrieve_parser.add_argument(
+        "--mode",
+        choices=["dense", "lexical", "hybrid", "hybrid_reranked"],
+        default="dense",
+        help="Retrieval strategy to use (default: dense).",
+    )
+    retrieve_parser.add_argument(
+        "--candidate-k",
+        type=int,
+        default=50,
+        help="Candidate pool size per system for hybrid/hybrid_reranked modes (default: 50).",
+    )
+    retrieve_parser.add_argument(
+        "--fusion-k",
+        type=int,
+        default=60,
+        help="Reciprocal rank fusion k constant for hybrid/hybrid_reranked modes (default: 60).",
+    )
+    retrieve_parser.add_argument(
+        "--reranker-config",
+        type=Path,
+        default=None,
+        help="Reranker config YAML; required when --mode hybrid_reranked.",
     )
 
     inspect_parser = subparsers.add_parser(
@@ -1048,6 +1080,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.command == "retrieve":
+        if args.mode == "hybrid_reranked" and args.reranker_config is None:
+            print(
+                "error: --reranker-config is required when --mode hybrid_reranked.",
+                file=sys.stderr,
+            )
+            return 1
+
         if args.config is not None:
             try:
                 pipeline_cfg = load_pipeline_config(args.config)
@@ -1132,17 +1171,45 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_path = run_dir / "retrieval_results.jsonl"
 
         embedding_client = _build_embedding_client(embedding_config)
-        result = run_retrieval(
-            questions,
-            store,
-            embedding_client,
-            output_path,
-            top_k=args.top_k,
-            run_id=args.run_id,
-            dataset_path=str(args.questions),
-            chunks_path=str(args.chunks_path) if args.chunks_path else None,
-            index_metadata=index_meta,
-        )
+
+        if args.mode == "dense":
+            result = run_retrieval(
+                questions,
+                store,
+                embedding_client,
+                output_path,
+                top_k=args.top_k,
+                run_id=args.run_id,
+                dataset_path=str(args.questions),
+                chunks_path=str(args.chunks_path) if args.chunks_path else None,
+                index_metadata=index_meta,
+            )
+        else:
+            from financebench_eval_harness.hybrid_retriever import run_retrieval_with_retriever
+
+            try:
+                retriever, fusion_meta, reranker_meta = _build_retriever(
+                    args.mode, store, embedding_client,
+                    candidate_k=args.candidate_k, fusion_k=args.fusion_k,
+                    reranker_config_path=args.reranker_config,
+                )
+            except (RerankerConfigError, RerankerProviderError) as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
+
+            result = run_retrieval_with_retriever(
+                questions,
+                retriever,
+                output_path,
+                top_k=args.top_k,
+                run_id=args.run_id,
+                dataset_path=str(args.questions),
+                chunks_path=str(args.chunks_path) if args.chunks_path else None,
+                index_metadata=index_meta,
+                retrieval_mode=args.mode,
+                fusion=fusion_meta,
+                reranker=reranker_meta,
+            )
 
         print(f"Retrieved top-{args.top_k} chunks for {result.question_count} questions.")
         print(f"Results written to {result.output_path}.")
@@ -1962,6 +2029,57 @@ def _build_embedding_client(config: EmbeddingConfig):
         return SentenceTransformersEmbeddingClient(config)
     from financebench_eval_harness.embedding import EmbeddingProviderError
     raise EmbeddingProviderError(f"Unsupported embedding provider: {config.provider}")
+
+
+def _build_reranker_client(config):
+    if config.provider == "mock":
+        return MockRerankerClient(config)
+    if config.provider == "http":
+        return HTTPRerankerClient(config)
+    if config.provider == "local":
+        return LocalRerankerClient(config)
+    raise RerankerProviderError(f"Unsupported reranker provider: {config.provider}")
+
+
+def _build_retriever(
+    mode: str,
+    store,
+    embedding_client,
+    *,
+    candidate_k: int,
+    fusion_k: int,
+    reranker_config_path: Path | None,
+):
+    """Compose a Retriever for the given --mode; returns (retriever, fusion_meta, reranker_meta)."""
+    from financebench_eval_harness.hybrid_retriever import (
+        DenseRetriever,
+        HybridRetriever,
+        LexicalRetriever,
+        RerankedRetriever,
+    )
+
+    dense = DenseRetriever(store, embedding_client)
+    if mode == "lexical":
+        return LexicalRetriever(store), None, None
+
+    lexical = LexicalRetriever(store)
+    chunk_lookup = {c.chunk_id: c for c in store.chunks}
+    hybrid = HybridRetriever(dense, lexical, chunk_lookup, candidate_k=candidate_k, fusion_k=fusion_k)
+    fusion_meta = {"k": fusion_k, "candidate_k": candidate_k}
+    if mode == "hybrid":
+        return hybrid, fusion_meta, None
+
+    reranker_config = load_reranker_config(reranker_config_path)
+    reranker_client = _build_reranker_client(reranker_config)
+    reranker_meta = {
+        "provider": reranker_config.provider,
+        "model_name": reranker_config.model_name,
+        "adapter_path": reranker_config.adapter_path,
+    }
+    reranked = RerankedRetriever(
+        hybrid, reranker_client, candidate_k=candidate_k, top_n=reranker_config.top_n,
+    )
+    return reranked, fusion_meta, reranker_meta
 
 
 def _read_jsonl_file(path: Path) -> list[dict]:
