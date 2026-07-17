@@ -125,10 +125,19 @@ different judge without re-running expensive generation.
 | `evidence_text_hit@k` | Gold evidence substring appears verbatim in a retrieved chunk |
 | `answerable_hit@k` | Any of the above signals matches |
 | `*_first_hit_rank` | Rank of earliest hit (lower = better retrieval) |
+| `*_ndcg@k` | Rank-weighted nDCG per doc/page/evidence_text (M9) |
 | `Jaccard overlap` | Token overlap between gold evidence and the best-matching chunk |
 
 The ±1 page offset tolerance accounts for known annotation drift between
 FinanceBench ground-truth page numbers and PDF extraction page indices.
+
+**Retrieval modes (M9):** `retrieve --mode {dense,lexical,hybrid,hybrid_reranked}`
+composes dense (FAISS), lexical (in-repo BM25), hybrid (reciprocal rank fusion
+of both), and hybrid + cross-encoder reranking (mock/HTTP/local `bge-reranker-base`
+providers) behind one `Retriever` interface. On the 46-question FinanceBench
+sample (`nomic-embed-text` embeddings), hybrid retrieval roughly doubles
+`doc_hit@10` over dense-only, and reranking nearly quadruples `doc_mrr@10` —
+see `reports/retrieval_mode_comparison.md` for the full comparison.
 
 ### Layer 2 — Answer Correctness (deterministic + optional LLM judge)
 
@@ -377,6 +386,7 @@ Generated reports live in `reports/`. Representative examples from local runs:
 - **Embedding comparison** — `reports/embedding_comparison_<run_id>.md` — model leaderboard, cost/latency
 - **Hallucination analysis** — `reports/hallucination_analysis_<run_id>.md` — root cause breakdown
 - **Experiment summary** — `reports/experiment_summary_<run_id>.md` — full project one-pager
+- **Retrieval mode comparison** — [`reports/retrieval_mode_comparison.md`](reports/retrieval_mode_comparison.md) — dense vs. hybrid vs. hybrid_reranked, committed (M9)
 
 Machine-readable exports (`summary_metrics.json`, `failure_breakdown.csv`, `leaderboard.csv`) are written to the run directory when generating an experiment-summary report.
 
@@ -393,6 +403,7 @@ Machine-readable exports (`summary_metrics.json`, `failure_breakdown.csv`, `lead
 | Embedding model comparison | M6 | Complete |
 | Grounding and hallucination analysis | M7 | Complete |
 | Experiment reporting | M8 | Complete |
+| Hybrid retrieval (BM25 + RRF + reranking) | M9 | Complete |
 
 Public FinanceBench sample only. Results in `reports/` are local experiment
 artefacts, not published benchmark claims.

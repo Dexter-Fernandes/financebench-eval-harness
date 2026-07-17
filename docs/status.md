@@ -2,53 +2,92 @@
 
 ## Current State
 
-- M7 complete on branch `M7` — PR not yet raised.
-- 885 tests pass, 2 skipped (Ollama integration tests).
-- Full pipeline operational through hallucination and grounding analysis (M7).
-- No live grounding analysis run recorded yet — all M7 tests use mock data.
+- M9 complete on branch `M9` — PR not yet raised.
+- 977 tests pass, 2 skipped (Ollama integration tests).
+- Full pipeline operational through hybrid retrieval (BM25 + RRF + cross-encoder reranking) and nDCG scoring.
+- Live comparison run recorded on the real FinanceBench sample corpus (46 questions, `nomic-embed-text` embeddings, `BAAI/bge-reranker-base` reranker) — see `reports/retrieval_mode_comparison.md`.
 
 ## Current Engineering Milestone
 
-**M7 complete: Hallucination and Grounding Analysis**
+**M9 complete: Hybrid Retrieval — BM25 + RRF + Cross-Encoder Reranking + nDCG**
 
 ```bash
-# Run grounding analysis on a completed RAG run
-# (update run_dir in configs/grounding_analysis.yaml first)
-python -m financebench_eval analyze-grounding \
-  --config configs/grounding_analysis.yaml
+# Retrieve with a specific mode: dense | lexical | hybrid | hybrid_reranked
+# Note: --mode/--candidate-k/--fusion-k/--reranker-config only exist on this
+# individual-flags path, not the --config pipeline-config path (M9.8 scope decision).
+python -m financebench_eval retrieve \
+  --index-dir data/indexes/financebench \
+  --questions data/processed/financebench/examples.jsonl \
+  --embedding-config configs/embedding/ollama_nomic.yaml \
+  --chunks-path data/processed/financebench/chunks.jsonl \
+  --output runs/<run_id>/retrieval_results.jsonl \
+  --run-id <run_id> \
+  --mode hybrid_reranked \
+  --reranker-config configs/reranker/bge_base_local.yaml
 
-# Inspect one question's failure details
-python -m financebench_eval inspect-failure \
-  --run runs/<run_id> --question-id financebench_001
+# Score (adds doc/page/evidence_text nDCG@k alongside hit@k, MRR@k)
+python -m financebench_eval eval-retrieval --config configs/retrieval.yaml --run-id <run_id>
+
+# Compare modes side by side
+python -m financebench_eval compare-runs \
+  --runs runs/<dense_id> runs/<hybrid_id> runs/<hybrid_reranked_id> \
+  --metric evidence_text_ndcg@10 \
+  --output reports/retrieval_mode_comparison.md
 ```
 
-Output layout:
+Output layout (additive to the existing retrieval schema):
 ```
 runs/<run_id>/
-  grounding_scores.jsonl          ← per-question grounding label + rule flags
-  citation_scores.jsonl           ← citation quality per question
-  failure_analysis.jsonl          ← joined signals + root_cause per question
-  failure_summary.json            ← aggregate root cause counts
-  grounding_analysis_config.yaml  ← config snapshot
+  retrieval_results.jsonl       ← rows gain optional dense_rank/lexical_rank/rerank_score
+  retrieval_run_metadata.json  ← gains retrieval_mode, fusion {k, candidate_k}, reranker {provider, model_name, adapter_path}
+  retrieval_scores.jsonl       ← per-question rows gain *_ndcg@k keys
+  retrieval_summary.json       ← aggregate gains *_ndcg@k keys
 
 reports/
-  hallucination_analysis_<run_id>.md
+  retrieval_mode_comparison.md  ← committed dense vs hybrid vs hybrid_reranked comparison
 ```
 
-Config: `configs/grounding_analysis.yaml`
-- Set `grounding_analysis.run_dir` to the target RAG run directory
-- Set `grounding_judge.enabled: true` to activate LLM-as-judge (requires Ollama)
+New modules: `lexical_index.py` (BM25), `fusion.py` (reciprocal rank fusion),
+`reranker.py` (mock/HTTP/local cross-encoder clients), `hybrid_retriever.py`
+(Retriever compositions: DenseRetriever, LexicalRetriever, HybridRetriever,
+RerankedRetriever). `retriever.run_retrieval` is now a thin wrapper over
+`DenseRetriever` + `run_retrieval_with_retriever` — behavior-preserving.
+
+`rag_hybrid` and `rag_reranked` RAG modes are wired end-to-end (config in
+`configs/evaluation/rag_modes.yaml`, reusing the `rag_dense_v2` prompt).
+
+## Real-data comparison (46 FinanceBench sample questions, nomic-embed-text)
+
+| Mode | doc_hit@10 | MRR@10 (doc) | evidence_text_ndcg@10 |
+|---|---|---|---|
+| dense | 0.326 | 0.119 | 0.000 |
+| hybrid (BM25 + RRF) | 0.652 | 0.249 | 0.011 |
+| hybrid_reranked (bge-reranker-base) | 0.717 | 0.452 | 0.000 |
+
+Hybrid retrieval roughly doubles doc-level hit rate over dense-only on this
+sample; reranking further concentrates the correct document at a higher rank
+(MRR nearly quadruples over dense). `evidence_text_ndcg@10` stays near zero
+across all three modes — exact evidence-text matching is rare in this small
+sample regardless of retrieval mode, consistent with the known FinanceBench
+table-extraction gap already tracked by this project's failure-label analysis.
+Full table with all metrics in `reports/retrieval_mode_comparison.md`.
 
 ## Next Steps
 
-1. Raise M7 PR and merge to main.
-2. Run `analyze-grounding` against a real RAG run; record root cause breakdown.
-3. Enable `grounding_judge` with a local Ollama model for richer per-example labels.
-4. Use failure analysis to guide M8 improvements (prompt tuning or retrieval improvements).
+1. Raise M9 PR and merge to main.
+2. M10 (fine-tuned reranker): train a LoRA adapter for `bge-reranker-base` and
+   load it via `RerankerConfig.adapter_path` — the seam is already in place.
+3. M13 (Snowflake embedding comparison) can reuse the same hybrid/reranked
+   retrieval modes against a different base embedding model.
+4. Known gap (tracked separately, not fixed in M9): `rag_predictions.jsonl`
+   writes `context_chunk_ids` but `analyze_grounding` reads `retrieved_chunks`,
+   so citation/context-sufficiency checks silently see empty context on real
+   `run-rag` output. Needs a fix before grounding analysis numbers on real runs
+   can be trusted.
 
 ---
 
-## How to Run the Full M5 Pipeline
+## How to Run the Full Pipeline
 
 ```bash
 # Prerequisites
@@ -60,7 +99,7 @@ ollama pull nomic-embed-text
 python -m financebench_eval chunk-documents --config configs/retrieval.yaml
 python -m financebench_eval build-index     --config configs/retrieval.yaml --progress
 
-# Retrieve
+# Retrieve (mode defaults to dense; see M9 example above for hybrid/hybrid_reranked)
 python -m financebench_eval retrieve \
   --config configs/retrieval.yaml --run-id run_005
 
@@ -89,5 +128,6 @@ python -m financebench_eval report-rag \
 
 - Public FinanceBench sample data only.
 - Local datasets, PDFs, vector stores, model caches, secrets, and run artefacts stay out of version control.
-- `reports/*.md` gitignored; generated reports remain local unless intentionally curated.
+- `reports/*.md` gitignored by default; `reports/retrieval_mode_comparison.md` is an intentional exception — a small, curated, reviewable comparison table committed per the AGENTS.md rule allowing curated documentation.
+- `rerank` is an optional dependency group (`pip install .[rerank]`) — torch/transformers/peft, only needed for the local cross-encoder reranker provider.
 - Do not publish benchmark claims until backed by reproducible runs with committed configuration.
