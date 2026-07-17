@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from financebench_eval_harness.retrieval_scoring import (
     answerable_hit,
     doc_hit,
     evidence_text_hit,
+    ndcg_at_k,
     normalize_doc_name,
     page_hit,
     score_evidence_overlap,
     score_hit_at_k,
+    score_ndcg,
     score_rank_metrics,
     score_retrieval_result,
     summarize_hit_at_k,
+    summarize_ndcg,
     summarize_rank_metrics,
     summarize_retrieval_scores,
 )
@@ -726,3 +731,105 @@ def test_score_evidence_overlap_top_k_limits_chunks_considered() -> None:
     )
     assert result["best_evidence_overlap"] == pytest.approx(0.0)
     assert result["evidence_text_hit"] is False
+
+
+# ---------------------------------------------------------------------------
+# nDCG@k — M9.1
+# ---------------------------------------------------------------------------
+
+
+def test_ndcg_at_k_single_relevant_doc_at_rank_three() -> None:
+    relevances = [0, 0, 1, 0, 0, 0, 0, 0, 0, 0]
+    result = ndcg_at_k(relevances, k=10, ideal_positives=1)
+    assert result == pytest.approx(1.0 / 2.0)
+
+
+def test_ndcg_at_k_perfect_ranking_gives_one() -> None:
+    relevances = [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    result = ndcg_at_k(relevances, k=10, ideal_positives=1)
+    assert result == pytest.approx(1.0)
+
+
+def test_ndcg_at_k_all_miss_gives_zero() -> None:
+    relevances = [0] * 10
+    result = ndcg_at_k(relevances, k=10, ideal_positives=1)
+    assert result == pytest.approx(0.0)
+
+
+def test_ndcg_at_k_empty_retrieved_gives_zero() -> None:
+    result = ndcg_at_k([], k=10, ideal_positives=1)
+    assert result == pytest.approx(0.0)
+
+
+def test_ndcg_at_k_zero_gold_positives_gives_zero_no_division_by_zero() -> None:
+    result = ndcg_at_k([1, 0, 0], k=10, ideal_positives=0)
+    assert result == pytest.approx(0.0)
+
+
+def test_ndcg_at_k_multiple_relevant_docs_ideal_ranking() -> None:
+    # Two positives available, both retrieved at ranks 1 and 2 — ideal ranking.
+    relevances = [1, 1, 0, 0, 0]
+    result = ndcg_at_k(relevances, k=5, ideal_positives=2)
+    assert result == pytest.approx(1.0)
+
+
+def test_score_ndcg_returns_expected_keys() -> None:
+    scores = score_ndcg(_RESULT_HIT_AT_RANK_7, _GOLD_3M_PAGE, ks=(1, 5, 10))
+    expected_keys = {
+        "doc_ndcg@1", "doc_ndcg@5", "doc_ndcg@10",
+        "page_ndcg@1", "page_ndcg@5", "page_ndcg@10",
+        "evidence_text_ndcg@1", "evidence_text_ndcg@5", "evidence_text_ndcg@10",
+    }
+    assert set(scores.keys()) == expected_keys
+
+
+def test_score_ndcg_default_ks_produces_four_k_values() -> None:
+    scores = score_ndcg(_RESULT_HIT_AT_RANK_7, _GOLD_3M_PAGE)
+    assert "doc_ndcg@1" in scores
+    assert "doc_ndcg@20" in scores
+    assert len(scores) == 3 * 4  # 3 metrics x 4 k values
+
+
+def test_score_ndcg_matches_hand_computed_value_for_rank_7_hit() -> None:
+    scores = score_ndcg(_RESULT_HIT_AT_RANK_7, _GOLD_3M_PAGE, ks=(5, 10))
+    # Beyond k=5, the single gold hit at rank 7 is invisible.
+    assert scores["doc_ndcg@5"] == pytest.approx(0.0)
+    assert scores["page_ndcg@5"] == pytest.approx(0.0)
+    assert scores["evidence_text_ndcg@5"] == pytest.approx(0.0)
+    # At k=10: one relevant chunk at rank 7, one gold positive -> DCG=1/log2(8), IDCG=1.
+    expected = 1.0 / math.log2(8)
+    assert scores["doc_ndcg@10"] == pytest.approx(expected)
+    assert scores["page_ndcg@10"] == pytest.approx(expected)
+    assert scores["evidence_text_ndcg@10"] == pytest.approx(expected)
+
+
+def test_score_ndcg_empty_retrieved_gives_zero_for_all_keys() -> None:
+    scores = score_ndcg({"retrieved": []}, _GOLD_3M_PAGE, ks=(10,))
+    assert scores["doc_ndcg@10"] == pytest.approx(0.0)
+    assert scores["page_ndcg@10"] == pytest.approx(0.0)
+    assert scores["evidence_text_ndcg@10"] == pytest.approx(0.0)
+
+
+def test_score_ndcg_empty_gold_evidence_gives_zero_no_division_by_zero() -> None:
+    scores = score_ndcg(_RESULT_HIT_AT_RANK_7, {"evidence": []}, ks=(10,))
+    assert scores["doc_ndcg@10"] == pytest.approx(0.0)
+    assert scores["page_ndcg@10"] == pytest.approx(0.0)
+    assert scores["evidence_text_ndcg@10"] == pytest.approx(0.0)
+
+
+def test_summarize_ndcg_mean_across_questions() -> None:
+    scores = [
+        {"doc_ndcg@10": 1.0, "page_ndcg@10": 1.0, "evidence_text_ndcg@10": 0.5},
+        {"doc_ndcg@10": 0.0, "page_ndcg@10": 0.0, "evidence_text_ndcg@10": 0.0},
+    ]
+    summary = summarize_ndcg(scores, ks=(10,))
+    assert summary["example_count"] == 2
+    assert summary["doc_ndcg@10"] == pytest.approx(0.5)
+    assert summary["page_ndcg@10"] == pytest.approx(0.5)
+    assert summary["evidence_text_ndcg@10"] == pytest.approx(0.25)
+
+
+def test_summarize_ndcg_empty_list() -> None:
+    summary = summarize_ndcg([], ks=(1, 5, 10, 20))
+    assert summary["example_count"] == 0
+    assert summary["doc_ndcg@1"] == 0.0

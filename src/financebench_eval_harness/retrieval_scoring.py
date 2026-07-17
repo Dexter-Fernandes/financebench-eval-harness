@@ -18,6 +18,7 @@ to avoid false negatives from the known ±1 annotation offset present in Finance
 
 from __future__ import annotations
 
+import math
 import statistics
 from collections.abc import Callable
 
@@ -36,7 +37,12 @@ __all__ = [
     "summarize_retrieval_scores",
     "summarize_hit_at_k",
     "summarize_rank_metrics",
+    "ndcg_at_k",
+    "score_ndcg",
+    "summarize_ndcg",
 ]
+
+_NDCG_METRICS = ("doc_ndcg", "page_ndcg", "evidence_text_ndcg")
 
 _SCORE_KEYS = ("doc_hit", "page_hit", "evidence_text_hit", "answerable_hit")
 _HIT_AT_K_METRICS = ("doc_hit", "page_hit", "evidence_text_hit")
@@ -385,3 +391,82 @@ def score_evidence_overlap(
         "best_evidence_overlap": best,
         "evidence_text_hit": best >= threshold,
     }
+
+
+# ---------------------------------------------------------------------------
+# nDCG@k — M9.1
+# ---------------------------------------------------------------------------
+
+
+def ndcg_at_k(relevances: list[int], k: int, ideal_positives: int) -> float:
+    """Compute normalized DCG over the first k binary relevances (1-based rank).
+
+    ideal_positives is the number of gold positives available for this metric
+    family; IDCG uses min(k, ideal_positives) positions at the top of an ideal
+    ranking. Returns 0.0 when there are no gold positives (no division by zero).
+    """
+    if ideal_positives <= 0:
+        return 0.0
+
+    dcg = sum(
+        rel / math.log2(rank + 1)
+        for rank, rel in enumerate(relevances[:k], start=1)
+    )
+    ideal_count = min(k, ideal_positives)
+    idcg = sum(1 / math.log2(rank + 1) for rank in range(1, ideal_count + 1))
+    return dcg / idcg if idcg else 0.0
+
+
+def score_ndcg(
+    retrieval_result: dict,
+    gold_example: dict,
+    ks: tuple[int, ...] = _DEFAULT_KS,
+    overlap_threshold: float = 0.5,
+) -> dict[str, float]:
+    """Compute doc/page/evidence_text nDCG@k for one question's retrieval result."""
+    evidence = gold_example.get("evidence", [])
+    retrieved = sorted(retrieval_result.get("retrieved", []), key=lambda c: c.get("rank", 0))
+
+    gold_docs = {normalize_doc_name(ev["doc_name"]) for ev in evidence}
+    gold_pages: set[tuple[str, int]] = set()
+    for ev in evidence:
+        doc = normalize_doc_name(ev["doc_name"])
+        for page in _page_candidates(ev):
+            gold_pages.add((doc, page))
+    gold_token_sets = [_word_tokens(ev["evidence_text"]) for ev in evidence]
+
+    def _doc_rel(chunk: dict) -> int:
+        return int(normalize_doc_name(chunk["doc_name"]) in gold_docs)
+
+    def _page_rel(chunk: dict) -> int:
+        return int((normalize_doc_name(chunk["doc_name"]), chunk["page_num"]) in gold_pages)
+
+    def _text_rel(chunk: dict) -> int:
+        tokens = _word_tokens(chunk.get("text", ""))
+        return int(any(_jaccard(tokens, g) >= overlap_threshold for g in gold_token_sets))
+
+    doc_relevances = [_doc_rel(c) for c in retrieved]
+    page_relevances = [_page_rel(c) for c in retrieved]
+    text_relevances = [_text_rel(c) for c in retrieved]
+
+    scores: dict[str, float] = {}
+    for k in ks:
+        scores[f"doc_ndcg@{k}"] = ndcg_at_k(doc_relevances, k, len(gold_docs))
+        scores[f"page_ndcg@{k}"] = ndcg_at_k(page_relevances, k, len(gold_pages))
+        scores[f"evidence_text_ndcg@{k}"] = ndcg_at_k(text_relevances, k, len(evidence))
+    return scores
+
+
+def summarize_ndcg(
+    scores: list[dict],
+    ks: tuple[int, ...] = _DEFAULT_KS,
+) -> dict[str, object]:
+    """Aggregate per-question nDCG scores into mean nDCG per key across questions."""
+    n = len(scores)
+    summary: dict[str, object] = {"example_count": n}
+    for metric in _NDCG_METRICS:
+        for k in ks:
+            key = f"{metric}@{k}"
+            values = [s.get(key, 0.0) for s in scores]
+            summary[key] = sum(values) / n if n else 0.0
+    return summary
