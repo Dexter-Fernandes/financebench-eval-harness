@@ -324,7 +324,22 @@ def test_local_reranker_client_missing_adapter_path_raises_clear_error(tmp_path:
     assert "adapter" in str(exc_info.value).lower()
 
 
-def test_local_reranker_client_missing_torch_gives_clear_install_message() -> None:
+def test_local_reranker_client_missing_torch_gives_clear_install_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercises the lazy-import ImportError branch regardless of whether
+    torch/transformers happen to be installed in the test environment."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _blocking_import(name, *args, **kwargs):
+        if name in ("torch", "transformers"):
+            raise ImportError(f"No module named '{name}'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _blocking_import)
+
     config = RerankerConfig(provider="local", model_name="m")
     client = LocalRerankerClient(config)
 
