@@ -11,6 +11,7 @@ import pytest
 import financebench_eval_harness.reranker as reranker_module
 from financebench_eval_harness.reranker import (
     HTTPRerankerClient,
+    LocalRerankerClient,
     MockRerankerClient,
     RerankerConfig,
     RerankerConfigError,
@@ -244,3 +245,125 @@ def test_repo_http_config_loads() -> None:
     config = load_reranker_config(Path("configs/reranker/http.yaml"))
     assert config.provider == "http"
     assert config.base_url == "http://localhost:8000"
+
+
+def test_repo_bge_base_local_config_loads() -> None:
+    config = load_reranker_config(Path("configs/reranker/bge_base_local.yaml"))
+    assert config.provider == "local"
+    assert config.model_name == "BAAI/bge-reranker-base"
+
+
+# ---------------------------------------------------------------------------
+# LocalRerankerClient — M9.6
+# ---------------------------------------------------------------------------
+
+
+class _StubLocalModel:
+    """Stand-in for a loaded tokenizer+model pair — no torch import required."""
+
+    def __init__(self) -> None:
+        self.batches: list[list[str]] = []
+
+    def score_batch(self, query: str, passages: list[str]) -> list[float]:
+        self.batches.append(list(passages))
+        return [float(len(p)) for p in passages]
+
+
+def test_local_reranker_client_batches_according_to_batch_size() -> None:
+    config = RerankerConfig(provider="local", model_name="stub-model", batch_size=2)
+    stub = _StubLocalModel()
+    client = LocalRerankerClient(config, model_factory=lambda model_name, adapter_path: stub)
+
+    scores = client.rerank("query", ["a", "bb", "ccc", "dddd", "e"])
+
+    assert scores == [1.0, 2.0, 3.0, 4.0, 1.0]
+    assert stub.batches == [["a", "bb"], ["ccc", "dddd"], ["e"]]
+
+
+def test_local_reranker_client_loads_model_lazily_once() -> None:
+    config = RerankerConfig(provider="local", model_name="stub-model")
+    stub = _StubLocalModel()
+    factory_calls: list[tuple[str, str | None]] = []
+
+    def factory(model_name: str, adapter_path: str | None):
+        factory_calls.append((model_name, adapter_path))
+        return stub
+
+    client = LocalRerankerClient(config, model_factory=factory)
+    client.rerank("q1", ["a"])
+    client.rerank("q2", ["b"])
+
+    assert factory_calls == [("stub-model", None)]
+
+
+def test_local_reranker_client_empty_passages_returns_empty_without_loading_model() -> None:
+    config = RerankerConfig(provider="local", model_name="stub-model")
+    factory_calls: list[object] = []
+
+    def factory(model_name: str, adapter_path: str | None):
+        factory_calls.append(1)
+        return _StubLocalModel()
+
+    client = LocalRerankerClient(config, model_factory=factory)
+    assert client.rerank("query", []) == []
+    assert factory_calls == []
+
+
+def test_local_reranker_client_requires_local_provider() -> None:
+    config = RerankerConfig(provider="mock", model_name="m")
+    with pytest.raises(RerankerConfigError):
+        LocalRerankerClient(config)
+
+
+def test_local_reranker_client_missing_adapter_path_raises_clear_error(tmp_path: Path) -> None:
+    config = RerankerConfig(
+        provider="local", model_name="m", adapter_path=str(tmp_path / "does_not_exist"),
+    )
+    with pytest.raises(RerankerConfigError) as exc_info:
+        LocalRerankerClient(config)
+    assert "adapter" in str(exc_info.value).lower()
+
+
+def test_local_reranker_client_missing_torch_gives_clear_install_message() -> None:
+    config = RerankerConfig(provider="local", model_name="m")
+    client = LocalRerankerClient(config)
+
+    with pytest.raises(RerankerProviderError) as exc_info:
+        client.rerank("query", ["a passage"])
+    assert "pip install .[rerank]" in str(exc_info.value)
+
+
+def test_local_reranker_client_real_model_path_wires_tokenizer_and_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("transformers")
+    import torch
+
+    class _FakeOutput:
+        def __init__(self, n: int) -> None:
+            self.logits = torch.tensor([[float(i)] for i in range(n)])
+
+    class _FakeModel:
+        def eval(self) -> "_FakeModel":
+            return self
+
+        def __call__(self, **kwargs):
+            return _FakeOutput(kwargs["input_ids"].shape[0])
+
+    class _FakeTokenizer:
+        def __call__(self, queries, passages, return_tensors=None, padding=None, truncation=None):
+            n = len(passages)
+            return {"input_ids": torch.zeros((n, 4), dtype=torch.long)}
+
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+    monkeypatch.setattr(
+        AutoModelForSequenceClassification, "from_pretrained", lambda *a, **k: _FakeModel()
+    )
+    monkeypatch.setattr(AutoTokenizer, "from_pretrained", lambda *a, **k: _FakeTokenizer())
+
+    config = RerankerConfig(provider="local", model_name="fake-model")
+    client = LocalRerankerClient(config)
+    scores = client.rerank("query", ["p1", "p2", "p3"])
+
+    assert scores == [0.0, 1.0, 2.0]

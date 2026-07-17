@@ -123,6 +123,98 @@ class HTTPRerankerClient:
         return [float(s) for s in scores]
 
 
+LocalRerankerModelFactory = Callable[[str, "str | None"], Any]
+
+
+class LocalRerankerClient:
+    """Reranker client running a local cross-encoder (e.g. BAAI/bge-reranker-base).
+
+    Lazily imports torch/transformers on first use so the base install stays
+    dependency-free; the `rerank` optional dependency group is only needed here.
+    """
+
+    def __init__(
+        self,
+        config: RerankerConfig,
+        *,
+        model_factory: LocalRerankerModelFactory | None = None,
+    ) -> None:
+        if config.provider != "local":
+            raise RerankerConfigError(
+                f"LocalRerankerClient requires provider 'local', got: {config.provider}"
+            )
+        if config.adapter_path is not None and not Path(config.adapter_path).exists():
+            raise RerankerConfigError(
+                f"Reranker adapter path not found: {config.adapter_path}"
+            )
+        self.config = config
+        self._model_factory = model_factory or _default_local_reranker_factory
+        self._model: Any = None
+
+    def rerank(self, query: str, passages: list[str]) -> list[float]:
+        if not passages:
+            return []
+        if self._model is None:
+            self._model = self._model_factory(self.config.model_name, self.config.adapter_path)
+
+        scores: list[float] = []
+        batch_size = self.config.batch_size
+        for i in range(0, len(passages), batch_size):
+            batch = passages[i : i + batch_size]
+            scores.extend(self._model.score_batch(query, batch))
+        return scores
+
+
+class _TransformersRerankerModel:
+    """Wraps a loaded tokenizer + sequence-classification model for scoring."""
+
+    def __init__(self, *, model: Any, tokenizer: Any, torch_module: Any) -> None:
+        self._model = model
+        self._tokenizer = tokenizer
+        self._torch = torch_module
+
+    def score_batch(self, query: str, passages: list[str]) -> list[float]:
+        inputs = self._tokenizer(
+            [query] * len(passages),
+            passages,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+        )
+        with self._torch.no_grad():
+            logits = self._model(**inputs).logits.squeeze(-1)
+        return [float(v) for v in logits.tolist()]
+
+
+def _default_local_reranker_factory(
+    model_name: str, adapter_path: str | None
+) -> "_TransformersRerankerModel":
+    try:
+        import torch
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+    except ImportError as exc:
+        raise RerankerProviderError(
+            "torch and transformers are required for the local reranker provider. "
+            "Install them with: pip install .[rerank]"
+        ) from exc
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForSequenceClassification.from_pretrained(model_name)
+
+    if adapter_path is not None:
+        try:
+            from peft import PeftModel
+        except ImportError as exc:
+            raise RerankerProviderError(
+                "peft is required to load a reranker adapter. "
+                "Install it with: pip install .[rerank]"
+            ) from exc
+        model = PeftModel.from_pretrained(model, adapter_path)
+
+    model.eval()
+    return _TransformersRerankerModel(model=model, tokenizer=tokenizer, torch_module=torch)
+
+
 def _http_transport(
     request_url: str,
     payload: dict[str, Any],
@@ -225,5 +317,6 @@ __all__ = [
     "RerankerProviderError",
     "MockRerankerClient",
     "HTTPRerankerClient",
+    "LocalRerankerClient",
     "load_reranker_config",
 ]
