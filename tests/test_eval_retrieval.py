@@ -346,6 +346,47 @@ def test_retrieval_summary_doc_hit_rate_correct_for_matching_run(tmp_path: Path)
     assert d["doc_hit@5_rate"] == pytest.approx(1.0)
 
 
+# ---------------------------------------------------------------------------
+# M9.2 — Back-fill nDCG into eval-retrieval
+# ---------------------------------------------------------------------------
+
+
+def test_score_retrieval_run_row_contains_ndcg_keys(tmp_path: Path) -> None:
+    run_dir = _run_with_one_example(tmp_path)
+    rows = [json.loads(l) for l in (run_dir / "retrieval_scores.jsonl").read_text().splitlines() if l.strip()]
+    assert "doc_ndcg@5" in rows[0]
+    assert "page_ndcg@5" in rows[0]
+    assert "evidence_text_ndcg@5" in rows[0]
+
+
+def test_retrieval_summary_json_contains_ndcg_keys(tmp_path: Path) -> None:
+    run_dir = _run_with_one_example(tmp_path)
+    d = json.loads((run_dir / "retrieval_summary.json").read_text())
+    assert "doc_ndcg@5" in d
+    assert "page_ndcg@5" in d
+    assert "evidence_text_ndcg@5" in d
+
+
+def test_score_retrieval_run_ndcg_additive_existing_keys_unchanged(tmp_path: Path) -> None:
+    """Adding nDCG must not change any pre-existing row or summary keys/values."""
+    run_dir = _run_with_one_example(tmp_path)
+    rows = [json.loads(l) for l in (run_dir / "retrieval_scores.jsonl").read_text().splitlines() if l.strip()]
+    row = rows[0]
+    assert row["question_id"] == "q1"
+    assert row["k"] == 5
+    assert row["gold_doc_name"] == "3M_2018_10K"
+    assert row["doc_hit@5"] is True
+    assert row["page_hit@5"] is True
+    assert row["evidence_text_hit@5"] is True
+    assert row["best_evidence_overlap"] == pytest.approx(1.0)
+    assert row["failure_labels"] == []
+
+    summary = json.loads((run_dir / "retrieval_summary.json").read_text())
+    assert summary["example_count"] == 1
+    assert summary["doc_hit@5_rate"] == pytest.approx(1.0)
+    assert summary["doc_mrr@5"] == pytest.approx(1.0)
+
+
 def test_score_retrieval_run_skips_questions_not_in_gold(tmp_path: Path) -> None:
     cfg = _make_config(tmp_path)
     run_dir = tmp_path / "run_001"
@@ -671,6 +712,13 @@ def test_leaderboard_contains_failure_label_counts(tmp_path: Path) -> None:
     assert isinstance(d["failure_label_counts"], dict)
 
 
+def test_leaderboard_contains_evidence_text_ndcg_at_k(tmp_path: Path) -> None:
+    run_dir = _run_with_one_example(tmp_path)
+    d = _read_leaderboard(run_dir)
+    assert "evidence_text_ndcg@k" in d
+    assert isinstance(d["evidence_text_ndcg@k"], float)
+
+
 def test_leaderboard_contains_config_metadata(tmp_path: Path) -> None:
     run_dir = _run_with_one_example(tmp_path)
     d = _read_leaderboard(run_dir)
@@ -722,6 +770,11 @@ def test_rich_report_metrics_section_contains_mrr_at_k(tmp_path: Path) -> None:
     content = _rich_report_content(tmp_path)
     assert "mrr@k" in content
     assert "mean_best_evidence_overlap" in content
+
+
+def test_rich_report_metrics_section_contains_ndcg_at_k(tmp_path: Path) -> None:
+    content = _rich_report_content(tmp_path)
+    assert "evidence_text_ndcg@k" in content
 
 
 def test_rich_report_has_best_examples_section(tmp_path: Path) -> None:

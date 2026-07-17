@@ -397,6 +397,32 @@ def test_cli_compare_runs_produces_markdown_table(tmp_path: Path) -> None:
     assert "|" in markdown  # contains a table
 
 
+def test_cli_compare_runs_sorts_by_ndcg_metric(tmp_path: Path) -> None:
+    """M9.2: compare-runs --metric evidence_text_ndcg@10 sorts by the nDCG key."""
+    from financebench_eval_harness.cli import main
+
+    run_a = tmp_path / "run_a"
+    run_b = tmp_path / "run_b"
+    run_a.mkdir(parents=True)
+    run_b.mkdir(parents=True)
+    _write_json(run_a / "run_metadata.json", {"run_id": "run_a", "mode": "rag_dense"})
+    _write_json(run_b / "run_metadata.json", {"run_id": "run_b", "mode": "rag_dense"})
+    _write_json(run_a / "retrieval_summary.json", {"example_count": 10, "evidence_text_ndcg@10": 0.40})
+    _write_json(run_b / "retrieval_summary.json", {"example_count": 10, "evidence_text_ndcg@10": 0.85})
+
+    output_path = tmp_path / "reports" / "ndcg_comparison.md"
+    rc = main([
+        "compare-runs",
+        "--runs", str(run_a), str(run_b),
+        "--metric", "evidence_text_ndcg@10",
+        "--output", str(output_path),
+    ])
+    assert rc == 0
+    markdown = output_path.read_text(encoding="utf-8")
+    assert "Sorted by: `evidence_text_ndcg@10`" in markdown
+    assert "**Best run:** `run_b`" in markdown
+
+
 # ---------------------------------------------------------------------------
 # M8.16 – Spec test 1: baseline report renders with mock data
 # ---------------------------------------------------------------------------
