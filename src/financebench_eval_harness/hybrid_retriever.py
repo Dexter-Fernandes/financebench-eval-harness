@@ -101,12 +101,16 @@ class HybridRetriever:
         *,
         candidate_k: int = 50,
         fusion_k: int = 60,
+        dense_weight: float = 1.0,
+        lexical_weight: float = 1.0,
     ) -> None:
         self._dense = dense
         self._lexical = lexical
         self._chunk_lookup = chunk_lookup
         self._candidate_k = candidate_k
         self._fusion_k = fusion_k
+        self._dense_weight = dense_weight
+        self._lexical_weight = lexical_weight
 
     def retrieve(self, query: str, top_k: int) -> list[RetrievedChunk]:
         dense_chunks = self._dense.retrieve(query, self._candidate_k)
@@ -118,6 +122,7 @@ class HybridRetriever:
         fused = reciprocal_rank_fusion(
             [[c.chunk_id for c in dense_chunks], [c.chunk_id for c in lexical_chunks]],
             k=self._fusion_k,
+            weights=[self._dense_weight, self._lexical_weight],
         )
 
         results: list[RetrievedChunk] = []

@@ -1808,6 +1808,52 @@ def test_retrieve_command_hybrid_mode_runs_end_to_end(tmp_path: Path, capsys) ->
     assert all("dense_rank" in row["retrieved"][0] or "lexical_rank" in row["retrieved"][0] for row in rows)
 
 
+def test_retrieve_command_hybrid_mode_default_weights_recorded_in_metadata(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    output_path = tmp_path / "results.jsonl"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "retrieve",
+        "--index-dir", str(index_dir),
+        "--questions", str(questions_path),
+        "--embedding-config", str(embedding_cfg),
+        "--output", str(output_path),
+        "--mode", "hybrid",
+    ])
+
+    assert exit_code == 0
+    meta = json.loads((tmp_path / "retrieval_run_metadata.json").read_text())
+    assert meta["fusion"] == {"k": 60, "candidate_k": 50, "dense_weight": 1.0, "lexical_weight": 1.0}
+
+
+def test_retrieve_command_hybrid_mode_custom_weights_recorded_in_metadata(tmp_path: Path, capsys) -> None:
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    output_path = tmp_path / "results.jsonl"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    _write_embedding_config(embedding_cfg)
+
+    exit_code = main([
+        "retrieve",
+        "--index-dir", str(index_dir),
+        "--questions", str(questions_path),
+        "--embedding-config", str(embedding_cfg),
+        "--output", str(output_path),
+        "--mode", "hybrid",
+        "--dense-weight", "3.0",
+        "--lexical-weight", "0.5",
+    ])
+
+    assert exit_code == 0
+    meta = json.loads((tmp_path / "retrieval_run_metadata.json").read_text())
+    assert meta["fusion"] == {"k": 60, "candidate_k": 50, "dense_weight": 3.0, "lexical_weight": 0.5}
+
+
 def test_retrieve_command_lexical_mode_runs_end_to_end(tmp_path: Path, capsys) -> None:
     index_dir = _build_test_index(tmp_path)
     questions_path = tmp_path / "questions.jsonl"

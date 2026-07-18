@@ -377,6 +377,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Reranker config YAML; required when --mode hybrid_reranked.",
     )
+    retrieve_parser.add_argument(
+        "--dense-weight",
+        type=float,
+        default=1.0,
+        help="Weight given to dense rankings in RRF for hybrid/hybrid_reranked modes (default: 1.0).",
+    )
+    retrieve_parser.add_argument(
+        "--lexical-weight",
+        type=float,
+        default=1.0,
+        help="Weight given to lexical (BM25) rankings in RRF for hybrid/hybrid_reranked modes (default: 1.0).",
+    )
 
     inspect_parser = subparsers.add_parser(
         "inspect-retrieval",
@@ -1192,6 +1204,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.mode, store, embedding_client,
                     candidate_k=args.candidate_k, fusion_k=args.fusion_k,
                     reranker_config_path=args.reranker_config,
+                    dense_weight=args.dense_weight, lexical_weight=args.lexical_weight,
                 )
             except (RerankerConfigError, RerankerProviderError) as exc:
                 print(str(exc), file=sys.stderr)
@@ -2061,6 +2074,8 @@ def _build_retriever(
     candidate_k: int,
     fusion_k: int,
     reranker_config_path: Path | None,
+    dense_weight: float = 1.0,
+    lexical_weight: float = 1.0,
 ):
     """Compose a Retriever for the given --mode; returns (retriever, fusion_meta, reranker_meta)."""
     from financebench_eval_harness.hybrid_retriever import (
@@ -2076,8 +2091,15 @@ def _build_retriever(
 
     lexical = LexicalRetriever(store)
     chunk_lookup = {c.chunk_id: c for c in store.chunks}
-    hybrid = HybridRetriever(dense, lexical, chunk_lookup, candidate_k=candidate_k, fusion_k=fusion_k)
-    fusion_meta = {"k": fusion_k, "candidate_k": candidate_k}
+    hybrid = HybridRetriever(
+        dense, lexical, chunk_lookup,
+        candidate_k=candidate_k, fusion_k=fusion_k,
+        dense_weight=dense_weight, lexical_weight=lexical_weight,
+    )
+    fusion_meta = {
+        "k": fusion_k, "candidate_k": candidate_k,
+        "dense_weight": dense_weight, "lexical_weight": lexical_weight,
+    }
     if mode == "hybrid":
         return hybrid, fusion_meta, None
 

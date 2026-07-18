@@ -382,7 +382,9 @@ def test_rag_hybrid_end_to_end_pipeline_completes(tmp_path: Path) -> None:
 
     metadata = json.loads((run_dir / "retrieval_run_metadata.json").read_text())
     assert metadata["retrieval_mode"] == "hybrid"
-    assert metadata["fusion"] == {"k": 60, "candidate_k": 50}
+    assert metadata["fusion"] == {
+        "k": 60, "candidate_k": 50, "dense_weight": 1.0, "lexical_weight": 1.0,
+    }
 
 
 def test_rag_reranked_end_to_end_pipeline_completes(tmp_path: Path) -> None:

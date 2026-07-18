@@ -91,6 +91,60 @@ def test_hybrid_retriever_output_ranks_are_sequential() -> None:
 
 
 # ---------------------------------------------------------------------------
+# HybridRetriever — dense_weight / lexical_weight threaded into RRF
+# ---------------------------------------------------------------------------
+
+
+def test_hybrid_retriever_default_weights_are_equal() -> None:
+    # b1 (dense rank1) vs a1 (lexical rank1) tie under unweighted RRF;
+    # alphabetical tie-break picks a1 first — this is the baseline to diverge from.
+    dense = _FakeRetriever({"q": [_rc("b1", 1)]})
+    lexical = _FakeRetriever({"q": [_rc("a1", 1)]})
+    chunk_lookup = {cid: _chunk(cid) for cid in ("a1", "b1")}
+
+    default = HybridRetriever(dense, lexical, chunk_lookup, candidate_k=1, fusion_k=60)
+    explicit = HybridRetriever(
+        dense, lexical, chunk_lookup, candidate_k=1, fusion_k=60,
+        dense_weight=1.0, lexical_weight=1.0,
+    )
+
+    assert [r.chunk_id for r in default.retrieve("q", top_k=2)] == ["a1", "b1"]
+    assert [r.chunk_id for r in explicit.retrieve("q", top_k=2)] == ["a1", "b1"]
+
+
+def test_hybrid_retriever_dense_weight_favors_dense_pick_on_tie() -> None:
+    dense = _FakeRetriever({"q": [_rc("b1", 1)]})
+    lexical = _FakeRetriever({"q": [_rc("a1", 1)]})
+    chunk_lookup = {cid: _chunk(cid) for cid in ("a1", "b1")}
+
+    # Unweighted: tie at RRF score, alphabetical tie-break picks a1 (lexical) first.
+    unweighted = HybridRetriever(dense, lexical, chunk_lookup, candidate_k=1, fusion_k=60)
+    assert [r.chunk_id for r in unweighted.retrieve("q", top_k=2)] == ["a1", "b1"]
+
+    # dense_weight=2.0 should flip the order to favor the dense pick.
+    dense_favored = HybridRetriever(
+        dense, lexical, chunk_lookup, candidate_k=1, fusion_k=60, dense_weight=2.0,
+    )
+    assert [r.chunk_id for r in dense_favored.retrieve("q", top_k=2)] == ["b1", "a1"]
+
+
+def test_hybrid_retriever_lexical_weight_favors_lexical_pick_on_tie() -> None:
+    dense = _FakeRetriever({"q": [_rc("a1", 1)]})
+    lexical = _FakeRetriever({"q": [_rc("b1", 1)]})
+    chunk_lookup = {cid: _chunk(cid) for cid in ("a1", "b1")}
+
+    # Unweighted: tie at RRF score, alphabetical tie-break picks a1 (dense) first.
+    unweighted = HybridRetriever(dense, lexical, chunk_lookup, candidate_k=1, fusion_k=60)
+    assert [r.chunk_id for r in unweighted.retrieve("q", top_k=2)] == ["a1", "b1"]
+
+    # lexical_weight=2.0 should flip the order to favor the lexical pick.
+    lexical_favored = HybridRetriever(
+        dense, lexical, chunk_lookup, candidate_k=1, fusion_k=60, lexical_weight=2.0,
+    )
+    assert [r.chunk_id for r in lexical_favored.retrieve("q", top_k=2)] == ["b1", "a1"]
+
+
+# ---------------------------------------------------------------------------
 # RerankedRetriever — reorders and truncates to top_n
 # ---------------------------------------------------------------------------
 
