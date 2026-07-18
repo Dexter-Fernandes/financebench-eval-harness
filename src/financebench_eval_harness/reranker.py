@@ -165,13 +165,23 @@ class LocalRerankerClient:
         return scores
 
 
-class _TransformersRerankerModel:
-    """Wraps a loaded tokenizer + sequence-classification model for scoring."""
+def _select_device(torch_module: Any) -> str:
+    """Return "cuda" if a GPU is available to torch, else "cpu"."""
+    return "cuda" if torch_module.cuda.is_available() else "cpu"
 
-    def __init__(self, *, model: Any, tokenizer: Any, torch_module: Any) -> None:
-        self._model = model
+
+class _TransformersRerankerModel:
+    """Wraps a loaded tokenizer + sequence-classification model for scoring.
+
+    Moves the model to `device` once at construction, and moves each batch's
+    input tensors to the same device before inference.
+    """
+
+    def __init__(self, *, model: Any, tokenizer: Any, torch_module: Any, device: str) -> None:
+        self._model = model.to(device)
         self._tokenizer = tokenizer
         self._torch = torch_module
+        self._device = device
 
     def score_batch(self, query: str, passages: list[str]) -> list[float]:
         inputs = self._tokenizer(
@@ -181,6 +191,7 @@ class _TransformersRerankerModel:
             padding=True,
             truncation=True,
         )
+        inputs = inputs.to(self._device)
         with self._torch.no_grad():
             logits = self._model(**inputs).logits.squeeze(-1)
         return [float(v) for v in logits.tolist()]
@@ -212,7 +223,8 @@ def _default_local_reranker_factory(
         model = PeftModel.from_pretrained(model, adapter_path)
 
     model.eval()
-    return _TransformersRerankerModel(model=model, tokenizer=tokenizer, torch_module=torch)
+    device = _select_device(torch)
+    return _TransformersRerankerModel(model=model, tokenizer=tokenizer, torch_module=torch, device=device)
 
 
 def _http_transport(

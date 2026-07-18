@@ -348,37 +348,156 @@ def test_local_reranker_client_missing_torch_gives_clear_install_message(
     assert "pip install .[rerank]" in str(exc_info.value)
 
 
+class _DeviceRecordingBatch(dict):
+    """Stands in for a real transformers BatchEncoding — supports .to(device)."""
+
+    def __init__(self, input_ids) -> None:
+        super().__init__(input_ids=input_ids)
+        self.to_calls: list[str] = []
+
+    def to(self, device: str) -> "_DeviceRecordingBatch":
+        self.to_calls.append(device)
+        return self
+
+
+class _DeviceRecordingModel:
+    """Stands in for a loaded transformers model — records .to(device) calls."""
+
+    def __init__(self, n_passages_fn) -> None:
+        self.to_calls: list[str] = []
+        self._n_passages_fn = n_passages_fn
+
+    def to(self, device: str) -> "_DeviceRecordingModel":
+        self.to_calls.append(device)
+        return self
+
+    def eval(self) -> "_DeviceRecordingModel":
+        return self
+
+    def __call__(self, **kwargs):
+        import torch
+
+        n = kwargs["input_ids"].shape[0]
+
+        class _Output:
+            logits = torch.tensor([[float(i)] for i in range(n)])
+
+        return _Output()
+
+
+class _DeviceRecordingTokenizer:
+    def __init__(self) -> None:
+        self.last_batch: _DeviceRecordingBatch | None = None
+
+    def __call__(self, queries, passages, return_tensors=None, padding=None, truncation=None):
+        import torch
+
+        self.last_batch = _DeviceRecordingBatch(torch.zeros((len(passages), 4), dtype=torch.long))
+        return self.last_batch
+
+
 def test_local_reranker_client_real_model_path_wires_tokenizer_and_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pytest.importorskip("transformers")
     import torch
 
-    class _FakeOutput:
-        def __init__(self, n: int) -> None:
-            self.logits = torch.tensor([[float(i)] for i in range(n)])
-
-    class _FakeModel:
-        def eval(self) -> "_FakeModel":
-            return self
-
-        def __call__(self, **kwargs):
-            return _FakeOutput(kwargs["input_ids"].shape[0])
-
-    class _FakeTokenizer:
-        def __call__(self, queries, passages, return_tensors=None, padding=None, truncation=None):
-            n = len(passages)
-            return {"input_ids": torch.zeros((n, 4), dtype=torch.long)}
-
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-    monkeypatch.setattr(
-        AutoModelForSequenceClassification, "from_pretrained", lambda *a, **k: _FakeModel()
-    )
-    monkeypatch.setattr(AutoTokenizer, "from_pretrained", lambda *a, **k: _FakeTokenizer())
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    model = _DeviceRecordingModel(lambda: None)
+    tokenizer = _DeviceRecordingTokenizer()
+    monkeypatch.setattr(AutoModelForSequenceClassification, "from_pretrained", lambda *a, **k: model)
+    monkeypatch.setattr(AutoTokenizer, "from_pretrained", lambda *a, **k: tokenizer)
 
     config = RerankerConfig(provider="local", model_name="fake-model")
     client = LocalRerankerClient(config)
     scores = client.rerank("query", ["p1", "p2", "p3"])
 
     assert scores == [0.0, 1.0, 2.0]
+
+
+def test_local_reranker_client_real_model_path_uses_cuda_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("transformers")
+    import torch
+
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    model = _DeviceRecordingModel(lambda: None)
+    tokenizer = _DeviceRecordingTokenizer()
+    monkeypatch.setattr(AutoModelForSequenceClassification, "from_pretrained", lambda *a, **k: model)
+    monkeypatch.setattr(AutoTokenizer, "from_pretrained", lambda *a, **k: tokenizer)
+
+    config = RerankerConfig(provider="local", model_name="fake-model")
+    client = LocalRerankerClient(config)
+    client.rerank("query", ["p1", "p2"])
+
+    assert model.to_calls == ["cuda"]
+    assert tokenizer.last_batch.to_calls == ["cuda"]
+
+
+def test_local_reranker_client_real_model_path_falls_back_to_cpu_when_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("transformers")
+    import torch
+
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    model = _DeviceRecordingModel(lambda: None)
+    tokenizer = _DeviceRecordingTokenizer()
+    monkeypatch.setattr(AutoModelForSequenceClassification, "from_pretrained", lambda *a, **k: model)
+    monkeypatch.setattr(AutoTokenizer, "from_pretrained", lambda *a, **k: tokenizer)
+
+    config = RerankerConfig(provider="local", model_name="fake-model")
+    client = LocalRerankerClient(config)
+    client.rerank("query", ["p1", "p2"])
+
+    assert model.to_calls == ["cpu"]
+    assert tokenizer.last_batch.to_calls == ["cpu"]
+
+
+# ---------------------------------------------------------------------------
+# Device selection — GPU auto-detect with CPU fallback
+# ---------------------------------------------------------------------------
+
+
+class _FakeCuda:
+    def __init__(self, available: bool) -> None:
+        self._available = available
+
+    def is_available(self) -> bool:
+        return self._available
+
+
+class _FakeTorchModule:
+    def __init__(self, cuda_available: bool) -> None:
+        self.cuda = _FakeCuda(cuda_available)
+
+
+def test_select_device_prefers_cuda_when_available() -> None:
+    assert reranker_module._select_device(_FakeTorchModule(True)) == "cuda"
+
+
+def test_select_device_falls_back_to_cpu_when_unavailable() -> None:
+    assert reranker_module._select_device(_FakeTorchModule(False)) == "cpu"
+
+
+def test_transformers_reranker_model_moves_model_and_inputs_to_selected_device() -> None:
+    import torch
+
+    model = _DeviceRecordingModel(lambda: None)
+    tokenizer = _DeviceRecordingTokenizer()
+
+    wrapped = reranker_module._TransformersRerankerModel(
+        model=model, tokenizer=tokenizer, torch_module=torch, device="cuda",
+    )
+    assert model.to_calls == ["cuda"]
+
+    scores = wrapped.score_batch("query", ["p1", "p2"])
+    assert len(scores) == 2
+    assert tokenizer.last_batch.to_calls == ["cuda"]
