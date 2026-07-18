@@ -288,6 +288,43 @@ Net: a small win on `doc_mrr@10`, but not the clean 3:1 win seen in plain
 `hybrid` mode. `reports/retrieval_mode_comparison.md` now reflects the
 re-run 3:1 numbers for granite `hybrid_reranked`.
 
+## Evidence Coverage Metric (M9.11)
+
+`evidence_text_hit@k` looked artificially low (~0.2 at best, vs. `doc_hit@10`
+of ~0.98 for granite/Octen) because it uses symmetric Jaccard between one
+chunk and the *entire* gold evidence span — and FinanceBench's gold evidence
+for numeric questions is usually a whole financial-statement table (median
+1,389 chars vs. an 800-char chunk_size; 64% of evidence spans exceed one
+chunk). No single chunk can contain most of them, and any extra chunk
+content dilutes the Jaccard union even when the chunk fully covers a shorter
+span.
+
+Added `evidence_coverage_hit@k` (additive — `evidence_text_hit@k` unchanged)
+using asymmetric coverage (`evidence tokens found / evidence tokens total`,
+the same formula as the existing `best_evidence_overlap`) over the
+**concatenated top-k chunks**, crediting evidence correctly assembled across
+adjacent chunks. Wired into `score_retrieval_run`/`retrieval_summary.json`/
+`retrieval_leaderboard.json`/the rich report the same additive way nDCG was
+wired in M9.2.
+
+**Spot-check before shipping (25 questions that newly "hit" under the new
+metric, Octen dense run):** 23/25 (92%) genuine — correct-document chunks
+alone already clear threshold, real multi-chunk table assembly. 1/25
+defensible-but-not-clean (3M's registered-securities table repeats verbatim
+across its own 2018/2022/2023 filings). 1/25 confirmed false positive
+(Amcor: the correct `2023Q2_10Q` filing has zero chunks in the top-10 at
+all, but `AMCOR_2023_10K`'s structurally-identical restructuring-liability
+table crosses threshold anyway) — a real, low-frequency failure mode when a
+company reuses near-identical table structure across filing periods. Full
+writeup and the complete `evidence_coverage_hit@k` table across all
+9 model×mode runs in `reports/retrieval_mode_comparison.md`.
+
+Headline result: `hybrid_reranked`'s `evidence_coverage_hit@20` is the best
+score in the whole table for granite (0.848) and nomic (0.587, its best
+result on any metric) — reranking's evidence-assembly benefit was
+completely invisible under the strict metric, which showed reranking
+*hurting* `evidence_text_hit@k` for every model.
+
 ## Next Steps
 
 1. Raise M9 PR and merge to main.

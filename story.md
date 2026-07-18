@@ -3,11 +3,11 @@
 ## Current state
 
 - M9 implementation complete on branch `M9` (many commits ahead of main, PR not yet raised).
-- 1007 tests pass, 2 skipped (Ollama integration tests).
-- `retrieve --mode {dense,lexical,hybrid,hybrid_reranked}` fully operational; `eval-retrieval` now reports nDCG@k alongside hit@k/MRR@k.
+- `retrieve --mode {dense,lexical,hybrid,hybrid_reranked}` fully operational; `eval-retrieval` now reports nDCG@k and evidence_coverage_hit@k alongside hit@k/MRR@k.
 - Live comparison runs recorded on the real FinanceBench sample (46 questions) for **three** embedding models — `nomic-embed-text`, `granite-embedding:278m` (both Ollama), and `Octen-Embedding-0.6B` (local HuggingFace `sentence-transformers`, GPU) — with the real `BAAI/bge-reranker-base` reranker, also GPU-accelerated. See `reports/retrieval_mode_comparison.md`.
 - Post-M9.10 follow-up work: diagnosed and fixed a real regression where hybrid retrieval was *hurting* a strong embedding model (see "Fusion weighting investigation" below), then extended the whole pipeline to local HuggingFace embedding models and found the calibration story has a third shape: for the strongest embedding model tested, hybrid never beats dense-alone at any weight (see "Local HuggingFace embedding models" below).
 - **`Octen-Embedding-0.6B` dense mode is now locked in as the pipeline default** — `configs/retrieval.yaml` and the `build-index`/`embed-question`/`retrieve` CLI defaults all point at it (`data/indexes/financebench/octen-embedding-0.6b`), since it's the strongest embedding model evaluated and doesn't benefit from hybrid fusion. `nomic-embed-text` and `granite-embedding:278m` are still reachable via `configs/retrieval_nomic.yaml` / `configs/retrieval_granite.yaml` for comparison runs.
+- **1024 tests pass, 2 skipped.** Added `evidence_coverage_hit@k` (M9.11) — see "Evidence coverage metric" below — alongside the existing strict `evidence_text_hit@k`, and re-scored all 11 existing retrieval-only runs with it (no re-indexing needed).
 
 ## Latest milestone
 
@@ -86,6 +86,31 @@ support that at all. Full narrative and VRAM math in `docs/status.md`'s
   is simply the better choice for this model on this corpus.
 - **Queued next:** `nvidia/Nemotron-3-Embed-1B-BF16` at `batch_size=6`
   (extrapolated VRAM math in `docs/status.md`) — not started yet.
+
+## Evidence coverage metric (M9.11)
+
+`evidence_text_hit@k` was structurally capped low (~0.2 best case vs.
+`doc_hit@10`'s ~0.98) because it's symmetric Jaccard against one chunk, and
+64% of FinanceBench's gold evidence spans (median 1,389 chars — usually a
+whole financial-statement table) are longer than the 800-char chunk_size.
+Added `evidence_coverage_hit@k` (additive, doesn't touch the strict metric):
+asymmetric coverage over the **concatenated top-k chunks**, reusing the
+existing `best_evidence_overlap` formula — credits evidence assembled
+across adjacent chunks instead of requiring one chunk to hold it all.
+
+Spot-checked all 25 questions that newly "hit" under the new metric on the
+Octen dense run before shipping it: **23/25 genuine** (correct-document
+chunks alone already clear threshold), **1/25 defensible** (3M repeats an
+identical cover-page table verbatim across its own filings), **1/25
+confirmed false positive** (Amcor: the right filing has zero chunks in the
+top-10, but a *different* Amcor filing's structurally-identical
+restructuring table crosses threshold anyway). Full detail and the
+complete 9-run table in `reports/retrieval_mode_comparison.md`.
+
+Headline: `hybrid_reranked`'s `evidence_coverage_hit@20` is the best score
+in the table for both granite (0.848) and nomic (0.587, nomic's best result
+on any metric) — reranking's real evidence-assembly benefit was invisible
+under the strict metric, which showed reranking *hurting* every model.
 
 ## Real-data comparison (46 FinanceBench sample questions)
 
