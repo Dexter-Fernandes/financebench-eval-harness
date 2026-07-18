@@ -1669,13 +1669,16 @@ def _cmd_compare_runs(args) -> int:
             run_data = load_run_data(run_dir)
 
         meta = run_data.run_metadata or {}
+        retrieval_meta = run_data.retrieval_run_metadata or {}
         ret = run_data.retrieval_summary or {}
         judge = meta.get("judge_summary") or {}
 
+        # Retrieval-only runs (produced by `retrieve` with no RAG generation)
+        # have no run_metadata.json — fall back to retrieval_run_metadata.json.
         row: dict = {
             "run_id": run_data.run_id,
-            "mode": meta.get("mode", "—"),
-            "model": meta.get("model_name", "—"),
+            "mode": meta.get("mode") or retrieval_meta.get("retrieval_mode") or "—",
+            "model": meta.get("model_name") or retrieval_meta.get("embedding_model") or "—",
             "embedding": (run_data.config or {}).get("embedding_model", "—"),
         }
         if judge.get("attempted_count"):
@@ -1684,10 +1687,19 @@ def _cmd_compare_runs(args) -> int:
         else:
             row["accuracy"] = "—"
 
+        # retrieval_summary.json stores rank metrics per-family (doc_mrr@k,
+        # page_mrr@k, evidence_text_mrr@k) — there is no bare "mrr@k" key;
+        # doc_mrr@k is the closest match to what this column has always meant.
+        doc_hit = ret.get("doc_hit@10_rate") or 0.0
+        doc_mrr = ret.get("mrr@10") or ret.get("doc_mrr@10") or 0.0
         row["evidence_hit@10"] = _fmt_metric(ret.get("evidence_text_hit@10_rate"))
         row["doc_hit@10"] = _fmt_metric(ret.get("doc_hit@10_rate"))
-        row["mrr@10"] = _fmt_metric(ret.get("mrr@10"))
-        row["_sort_key"] = ret.get(metric) or 0.0
+        row["mrr@10"] = _fmt_metric(ret.get("mrr@10") or ret.get("doc_mrr@10"))
+        # Primary sort key is whatever --metric was requested; doc_hit@10 and
+        # doc_mrr@10 break ties so retrieval-only comparisons stay sensible
+        # even when the requested metric is sparse/strict (e.g. exact-text
+        # hit rates on a small sample) and ties across most or all runs.
+        row["_sort_key"] = (ret.get(metric) or 0.0, doc_hit, doc_mrr)
         rows.append(row)
 
     rows.sort(key=lambda r: r["_sort_key"], reverse=True)

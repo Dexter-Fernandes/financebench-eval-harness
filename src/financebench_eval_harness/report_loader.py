@@ -19,6 +19,7 @@ class RunData:
     run_id: str
     run_metadata: dict | None
     rag_run_metadata: dict | None
+    retrieval_run_metadata: dict | None
     config: dict | None
     retrieval_summary: dict | None
     joined_summary: dict | None
@@ -31,6 +32,7 @@ class RunData:
 _OPTIONAL_FILES: tuple[str, ...] = (
     "run_metadata.json",
     "rag_run_metadata.json",
+    "retrieval_run_metadata.json",
     "config.yaml",
     "retrieval_summary.json",
     "joined/joined_summary.json",
@@ -98,6 +100,7 @@ def load_run_data(
 
     run_metadata = _load_json("run_metadata.json")
     rag_run_metadata = _load_json("rag_run_metadata.json")
+    retrieval_run_metadata = _load_json("retrieval_run_metadata.json")
 
     config: dict | None = None
     config_path = run_dir / "config.yaml"
@@ -136,6 +139,7 @@ def load_run_data(
         run_id=run_dir.name,
         run_metadata=run_metadata,
         rag_run_metadata=rag_run_metadata,
+        retrieval_run_metadata=retrieval_run_metadata,
         config=config,
         retrieval_summary=retrieval_summary,
         joined_summary=joined_summary,

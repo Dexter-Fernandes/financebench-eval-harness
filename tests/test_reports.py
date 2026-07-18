@@ -99,6 +99,38 @@ def test_load_run_data_loads_present_files(tmp_path: Path) -> None:
     assert data.run_id == "run_full"
 
 
+def test_load_run_data_loads_retrieval_run_metadata(tmp_path: Path) -> None:
+    """load_run_data populates retrieval_run_metadata from retrieval_run_metadata.json."""
+    from financebench_eval_harness.report_loader import load_run_data
+
+    run_dir = tmp_path / "run_retrieval_only"
+    _write_json(
+        run_dir / "retrieval_run_metadata.json",
+        {"run_id": "r1", "retrieval_mode": "hybrid", "embedding_model": "nomic-embed-text"},
+    )
+
+    with warnings.catch_warnings(record=True):
+        warnings.simplefilter("always")
+        data = load_run_data(run_dir)
+
+    assert data.retrieval_run_metadata == {
+        "run_id": "r1", "retrieval_mode": "hybrid", "embedding_model": "nomic-embed-text",
+    }
+
+
+def test_load_run_data_retrieval_run_metadata_none_when_absent(tmp_path: Path) -> None:
+    from financebench_eval_harness.report_loader import load_run_data
+
+    run_dir = tmp_path / "run_no_retrieval_metadata"
+    run_dir.mkdir()
+
+    with warnings.catch_warnings(record=True):
+        warnings.simplefilter("always")
+        data = load_run_data(run_dir)
+
+    assert data.retrieval_run_metadata is None
+
+
 # ---------------------------------------------------------------------------
 # M8.10 – Experiment summary report (test 7)
 # ---------------------------------------------------------------------------
@@ -421,6 +453,143 @@ def test_cli_compare_runs_sorts_by_ndcg_metric(tmp_path: Path) -> None:
     markdown = output_path.read_text(encoding="utf-8")
     assert "Sorted by: `evidence_text_ndcg@10`" in markdown
     assert "**Best run:** `run_b`" in markdown
+
+
+def _make_retrieval_only_run(
+    run_dir: Path,
+    *,
+    run_id: str,
+    retrieval_mode: str,
+    embedding_model: str = "nomic-embed-text",
+    doc_hit_at_10: float,
+    doc_mrr_at_10: float,
+    evidence_text_ndcg_at_10: float = 0.0,
+) -> None:
+    """A run produced by `retrieve` only — no run_metadata.json (no RAG generation)."""
+    run_dir.mkdir(parents=True, exist_ok=True)
+    _write_json(
+        run_dir / "retrieval_run_metadata.json",
+        {
+            "run_id": run_id,
+            "retrieval_mode": retrieval_mode,
+            "embedding_model": embedding_model,
+        },
+    )
+    _write_json(
+        run_dir / "retrieval_summary.json",
+        {
+            "example_count": 46,
+            "doc_hit@10_rate": doc_hit_at_10,
+            "doc_mrr@10": doc_mrr_at_10,
+            "evidence_text_ndcg@10": evidence_text_ndcg_at_10,
+        },
+    )
+
+
+def test_cli_compare_runs_shows_retrieval_mode_and_embedding_for_retrieval_only_runs(
+    tmp_path: Path,
+) -> None:
+    from financebench_eval_harness.cli import main
+
+    run_dir = tmp_path / "run_hybrid"
+    _make_retrieval_only_run(
+        run_dir, run_id="run_hybrid", retrieval_mode="hybrid",
+        embedding_model="nomic-embed-text", doc_hit_at_10=0.65, doc_mrr_at_10=0.25,
+    )
+
+    output_path = tmp_path / "reports" / "comparison.md"
+    rc = main([
+        "compare-runs",
+        "--runs", str(run_dir),
+        "--output", str(output_path),
+    ])
+    assert rc == 0
+    markdown = output_path.read_text(encoding="utf-8")
+    assert "| run_hybrid ★ | hybrid | nomic-embed-text |" in markdown
+
+
+def test_cli_compare_runs_mrr_column_falls_back_to_doc_mrr(tmp_path: Path) -> None:
+    from financebench_eval_harness.cli import main
+
+    run_dir = tmp_path / "run_hybrid"
+    _make_retrieval_only_run(
+        run_dir, run_id="run_hybrid", retrieval_mode="hybrid",
+        doc_hit_at_10=0.65, doc_mrr_at_10=0.249,
+    )
+
+    output_path = tmp_path / "reports" / "comparison.md"
+    rc = main([
+        "compare-runs",
+        "--runs", str(run_dir),
+        "--output", str(output_path),
+    ])
+    assert rc == 0
+    markdown = output_path.read_text(encoding="utf-8")
+    assert "0.249" in markdown
+
+
+def test_cli_compare_runs_tie_break_prefers_doc_hit_and_doc_mrr(tmp_path: Path) -> None:
+    """When the primary --metric ties (or is absent), row order should still be
+    sensible for retrieval-only runs: prefer higher doc_hit@10, then doc_mrr@10."""
+    from financebench_eval_harness.cli import main
+
+    run_dense = tmp_path / "run_dense"
+    run_reranked = tmp_path / "run_reranked"
+    # Both tie at evidence_text_ndcg@10 == 0.0, but reranked is clearly the
+    # better retrieval run on doc_hit@10 / doc_mrr@10.
+    _make_retrieval_only_run(
+        run_dense, run_id="run_dense", retrieval_mode="dense",
+        doc_hit_at_10=0.326, doc_mrr_at_10=0.119, evidence_text_ndcg_at_10=0.0,
+    )
+    _make_retrieval_only_run(
+        run_reranked, run_id="run_reranked", retrieval_mode="hybrid_reranked",
+        doc_hit_at_10=0.717, doc_mrr_at_10=0.452, evidence_text_ndcg_at_10=0.0,
+    )
+
+    output_path = tmp_path / "reports" / "comparison.md"
+    rc = main([
+        "compare-runs",
+        "--runs", str(run_dense), str(run_reranked),
+        "--metric", "evidence_text_ndcg@10",
+        "--output", str(output_path),
+    ])
+    assert rc == 0
+    markdown = output_path.read_text(encoding="utf-8")
+    # run_reranked should sort first (and be marked best) despite the tie on
+    # the primary metric, because it dominates on doc_hit@10 and doc_mrr@10.
+    reranked_pos = markdown.index("run_reranked")
+    dense_pos = markdown.index("run_dense")
+    assert reranked_pos < dense_pos
+    assert "**Best run:** `run_reranked`" in markdown
+
+
+def test_cli_compare_runs_explicit_metric_still_wins_over_tie_breakers(tmp_path: Path) -> None:
+    """The requested --metric remains the primary sort key; tie-breakers only
+    apply when it doesn't already distinguish the rows."""
+    from financebench_eval_harness.cli import main
+
+    run_a = tmp_path / "run_a"
+    run_b = tmp_path / "run_b"
+    # run_a wins on the explicit metric despite run_b having better doc_hit/mrr.
+    _make_retrieval_only_run(
+        run_a, run_id="run_a", retrieval_mode="hybrid",
+        doc_hit_at_10=0.30, doc_mrr_at_10=0.10, evidence_text_ndcg_at_10=0.50,
+    )
+    _make_retrieval_only_run(
+        run_b, run_id="run_b", retrieval_mode="hybrid_reranked",
+        doc_hit_at_10=0.90, doc_mrr_at_10=0.80, evidence_text_ndcg_at_10=0.10,
+    )
+
+    output_path = tmp_path / "reports" / "comparison.md"
+    rc = main([
+        "compare-runs",
+        "--runs", str(run_a), str(run_b),
+        "--metric", "evidence_text_ndcg@10",
+        "--output", str(output_path),
+    ])
+    assert rc == 0
+    markdown = output_path.read_text(encoding="utf-8")
+    assert "**Best run:** `run_a`" in markdown
 
 
 # ---------------------------------------------------------------------------
