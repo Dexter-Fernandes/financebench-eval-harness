@@ -252,7 +252,7 @@ def build_parser() -> argparse.ArgumentParser:
     build_index_parser.add_argument(
         "--embedding-config",
         type=Path,
-        default=Path("configs/embedding/ollama_nomic.yaml"),
+        default=Path("configs/embedding/octen_0.6b_local.yaml"),
         help="Embedding config YAML (provider, model, batch size).",
     )
     build_index_parser.add_argument(
@@ -264,7 +264,7 @@ def build_parser() -> argparse.ArgumentParser:
     build_index_parser.add_argument(
         "--index-dir",
         type=Path,
-        default=Path("data/indexes/financebench"),
+        default=Path("data/indexes/financebench/octen-embedding-0.6b"),
         help="Directory where the index artefacts will be written.",
     )
     build_index_parser.add_argument(
@@ -292,7 +292,7 @@ def build_parser() -> argparse.ArgumentParser:
     embed_question_parser.add_argument(
         "--embedding-config",
         type=Path,
-        default=Path("configs/embedding/ollama_nomic.yaml"),
+        default=Path("configs/embedding/octen_0.6b_local.yaml"),
         help="Embedding config YAML (provider, model, batch size).",
     )
 
@@ -309,7 +309,7 @@ def build_parser() -> argparse.ArgumentParser:
     retrieve_parser.add_argument(
         "--index-dir",
         type=Path,
-        default=Path("data/indexes/financebench"),
+        default=Path("data/indexes/financebench/octen-embedding-0.6b"),
         help="Directory containing the built FAISS index.",
     )
     retrieve_parser.add_argument(
@@ -321,7 +321,7 @@ def build_parser() -> argparse.ArgumentParser:
     retrieve_parser.add_argument(
         "--embedding-config",
         type=Path,
-        default=Path("configs/embedding/ollama_nomic.yaml"),
+        default=Path("configs/embedding/octen_0.6b_local.yaml"),
         help="Embedding config YAML (must match the model used to build the index).",
     )
     retrieve_parser.add_argument(

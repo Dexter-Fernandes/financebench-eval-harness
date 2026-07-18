@@ -5,7 +5,7 @@ import pytest
 import yaml
 
 import financebench_eval_harness.data as data_module
-from financebench_eval_harness.cli import main
+from financebench_eval_harness.cli import build_parser, main
 from financebench_eval_harness.llm import LLMGenerationResult
 
 
@@ -2692,3 +2692,33 @@ def test_run_rag_command_limit_flag_slices_examples(tmp_path: Path, capsys) -> N
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "Attempted: 1" in captured.out
+
+
+def test_build_index_embedding_config_defaults_to_octen() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["build-index", "--pages", "pages.jsonl"])
+    assert args.embedding_config == Path("configs/embedding/octen_0.6b_local.yaml")
+
+
+def test_build_index_index_dir_defaults_to_octen_index() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["build-index", "--pages", "pages.jsonl"])
+    assert args.index_dir == Path("data/indexes/financebench/octen-embedding-0.6b")
+
+
+def test_embed_question_embedding_config_defaults_to_octen() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["embed-question", "--question", "what is revenue?"])
+    assert args.embedding_config == Path("configs/embedding/octen_0.6b_local.yaml")
+
+
+def test_retrieve_embedding_config_defaults_to_octen() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["retrieve", "--questions", "questions.jsonl"])
+    assert args.embedding_config == Path("configs/embedding/octen_0.6b_local.yaml")
+
+
+def test_retrieve_index_dir_defaults_to_octen_index() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["retrieve", "--questions", "questions.jsonl"])
+    assert args.index_dir == Path("data/indexes/financebench/octen-embedding-0.6b")

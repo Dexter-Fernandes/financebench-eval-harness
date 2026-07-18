@@ -3,11 +3,12 @@
 ## Current State
 
 - M9 complete on branch `M9` — PR not yet raised.
-- 1002 tests pass, 2 skipped (Ollama integration tests).
+- 1007 tests pass, 2 skipped (Ollama integration tests).
 - Full pipeline operational through hybrid retrieval (BM25 + RRF + cross-encoder reranking) and nDCG scoring.
 - Live comparison run recorded on the real FinanceBench sample corpus (46 questions) across **three** embedding models — `nomic-embed-text`, `granite-embedding:278m` (both via Ollama), and `Octen-Embedding-0.6B` (local HuggingFace `sentence-transformers`) — with the real `BAAI/bge-reranker-base` reranker. See `reports/retrieval_mode_comparison.md`.
 - Post-M9.10 follow-up: `HybridRetriever`'s RRF fusion now supports `dense_weight`/`lexical_weight`, calibrated per embedding model (see "Fusion Weighting Investigation" below), and `LocalRerankerClient` auto-detects CUDA (falls back to CPU) — a real GPU cut reranking time on 46 questions from ~11 min to ~1.6 min.
 - Confirmed the existing `SentenceTransformersEmbeddingClient` provider (already in `embedding.py`, previously unused against a real model) supports local HuggingFace embedding models with zero code changes — see "Local HuggingFace Embedding Models" below for what it took to actually get one running on this GPU.
+- **Default embedding model locked in: `Octen-Embedding-0.6B`, dense mode.** It's the strongest of the three models evaluated and gets no benefit from hybrid fusion at any tested weight ratio, so dense is both its best mode and now the pipeline default. `configs/retrieval.yaml` and the `build-index`/`embed-question`/`retrieve` CLI flag defaults all point at it (`data/indexes/financebench/octen-embedding-0.6b`, `configs/embedding/octen_0.6b_local.yaml`). `nomic-embed-text`/`granite-embedding:278m` remain available via `configs/retrieval_nomic.yaml`/`configs/retrieval_granite.yaml` for comparison runs.
 
 ## Current Engineering Milestone
 
@@ -17,6 +18,8 @@
 # Retrieve with a specific mode: dense | lexical | hybrid | hybrid_reranked
 # Note: --mode/--candidate-k/--fusion-k/--reranker-config only exist on this
 # individual-flags path, not the --config pipeline-config path (M9.8 scope decision).
+# Example below targets nomic explicitly (hybrid_reranked helps it the most,
+# per the pattern below) — the pipeline default (no flags) is Octen dense-alone.
 python -m financebench_eval retrieve \
   --index-dir data/indexes/financebench \
   --questions data/processed/financebench/examples.jsonl \
@@ -317,7 +320,10 @@ re-run 3:1 numbers for granite `hybrid_reranked`.
 # Prerequisites
 ollama serve
 ollama pull llama3.2:3b
-ollama pull nomic-embed-text
+# Default embedding model (configs/retrieval.yaml) is Octen-Embedding-0.6B, a
+# local HuggingFace sentence-transformers model — no ollama pull needed for
+# it, but it does need `pip install -e ".[local-embed]"` and downloads
+# weights from HF Hub on first use.
 
 # Chunk + index (once)
 python -m financebench_eval chunk-documents --config configs/retrieval.yaml

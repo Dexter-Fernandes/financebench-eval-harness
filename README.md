@@ -150,6 +150,14 @@ model, dense-alone is simply the better mode. See
 `reports/retrieval_mode_comparison.md` for the full three-model comparison
 and investigation.
 
+**Default embedding model:** `Octen-Embedding-0.6B` (dense mode) is locked in
+as the pipeline default (`configs/retrieval.yaml`, and the `build-index` /
+`embed-question` / `retrieve` CLI defaults) — it's the strongest of the three
+models evaluated and doesn't benefit from hybrid fusion, so `dense` is both
+its best and its default mode. `nomic-embed-text` and `granite-embedding:278m`
+remain available via `configs/retrieval_nomic.yaml` / `configs/retrieval_granite.yaml`
+for comparison runs.
+
 ### Layer 2 — Answer Correctness (deterministic + optional LLM judge)
 
 Four deterministic metrics handle the unit-normalization problem:
@@ -205,7 +213,7 @@ without changes to pipeline code.
 | Ollama | `snowflake-arctic-embed:335m` | 1024 |
 | Ollama | `granite-embedding:278m` | 768 |
 | Ollama | `bge-m3` | 1024 |
-| sentence_transformers (local HuggingFace) | `Octen-Embedding-0.6B` | 1024 |
+| sentence_transformers (local HuggingFace) | `Octen-Embedding-0.6B` (**default**) | 1024 |
 | OpenAI | `text-embedding-3-*` | configurable |
 | Voyage | `voyage-*` | configurable |
 
@@ -318,11 +326,15 @@ python -m financebench_eval run-baseline \
 # → reports/baseline_<run_id>.md
 ```
 
-### Full local pipeline (Ollama required)
+### Full local pipeline (Ollama + local embedding model required)
+
+The default embedding model (`configs/retrieval.yaml`) is `Octen-Embedding-0.6B`,
+a local HuggingFace `sentence-transformers` model — no Ollama pull needed for
+it, but it does need the `local-embed` extra (`pip install -e ".[local-embed]"`)
+and downloads the model weights from HF Hub on first use.
 
 ```bash
 ollama pull llama3.2:3b
-ollama pull nomic-embed-text
 
 # Process data
 financebench-harness extract-documents

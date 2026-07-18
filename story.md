@@ -3,10 +3,11 @@
 ## Current state
 
 - M9 implementation complete on branch `M9` (many commits ahead of main, PR not yet raised).
-- 1002 tests pass, 2 skipped (Ollama integration tests).
+- 1007 tests pass, 2 skipped (Ollama integration tests).
 - `retrieve --mode {dense,lexical,hybrid,hybrid_reranked}` fully operational; `eval-retrieval` now reports nDCG@k alongside hit@k/MRR@k.
 - Live comparison runs recorded on the real FinanceBench sample (46 questions) for **three** embedding models — `nomic-embed-text`, `granite-embedding:278m` (both Ollama), and `Octen-Embedding-0.6B` (local HuggingFace `sentence-transformers`, GPU) — with the real `BAAI/bge-reranker-base` reranker, also GPU-accelerated. See `reports/retrieval_mode_comparison.md`.
 - Post-M9.10 follow-up work: diagnosed and fixed a real regression where hybrid retrieval was *hurting* a strong embedding model (see "Fusion weighting investigation" below), then extended the whole pipeline to local HuggingFace embedding models and found the calibration story has a third shape: for the strongest embedding model tested, hybrid never beats dense-alone at any weight (see "Local HuggingFace embedding models" below).
+- **`Octen-Embedding-0.6B` dense mode is now locked in as the pipeline default** — `configs/retrieval.yaml` and the `build-index`/`embed-question`/`retrieve` CLI defaults all point at it (`data/indexes/financebench/octen-embedding-0.6b`), since it's the strongest embedding model evaluated and doesn't benefit from hybrid fusion. `nomic-embed-text` and `granite-embedding:278m` are still reachable via `configs/retrieval_nomic.yaml` / `configs/retrieval_granite.yaml` for comparison runs.
 
 ## Latest milestone
 
@@ -171,7 +172,8 @@ python -m financebench_eval retrieve \
 
 # Score any granite run (configs/retrieval_granite.yaml points index_dir/embedding
 # at the granite index so leaderboard/report metadata is accurate, unlike the
-# nomic-tagged default configs/retrieval.yaml)
+# Octen-tagged default configs/retrieval.yaml — use configs/retrieval_nomic.yaml
+# for nomic runs the same way)
 python -m financebench_eval eval-retrieval --config configs/retrieval_granite.yaml --run-id <run_id>
 
 # Octen-Embedding-0.6B (local HuggingFace, GPU) — dense/hybrid modes only

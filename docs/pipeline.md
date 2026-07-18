@@ -20,7 +20,7 @@ flowchart TD
   %% ─────────────────────────────────────────────
   subgraph S0["Stage 0 — build-index"]
     EXTRACT["extract-pages\nPDF → page text"]
-    BUILD["build-index\nConfigs:\n  configs/retrieval/recursive_text_800.yaml\n  configs/embedding/ollama_nomic.yaml\nChunks pages → embeds → builds FAISS index"]
+    BUILD["build-index\nConfigs:\n  configs/retrieval.yaml\n  configs/embedding/octen_0.6b_local.yaml (default)\nChunks pages → embeds → builds FAISS index"]
   end
 
   PDFS --> EXTRACT
