@@ -134,10 +134,18 @@ FinanceBench ground-truth page numbers and PDF extraction page indices.
 **Retrieval modes (M9):** `retrieve --mode {dense,lexical,hybrid,hybrid_reranked}`
 composes dense (FAISS), lexical (in-repo BM25), hybrid (reciprocal rank fusion
 of both), and hybrid + cross-encoder reranking (mock/HTTP/local `bge-reranker-base`
-providers) behind one `Retriever` interface. On the 46-question FinanceBench
-sample (`nomic-embed-text` embeddings), hybrid retrieval roughly doubles
-`doc_hit@10` over dense-only, and reranking nearly quadruples `doc_mrr@10` —
-see `reports/retrieval_mode_comparison.md` for the full comparison.
+providers, auto-detects CUDA and falls back to CPU) behind one `Retriever`
+interface. Hybrid fusion weights dense vs. lexical rankings per embedding
+model — a weak dense model (`nomic-embed-text`) benefits from lexical's
+full-strength vote (1:1), while a strong one (`granite-embedding:278m`) needs
+dense upweighted (3:1) so lexical noise can't outrank an already-confident
+dense hit; these ratios are calibrated per model in
+`configs/embedding/ollama_*.yaml` and applied automatically. On the
+46-question FinanceBench sample, calibrated hybrid retrieval roughly doubles
+`doc_hit@10` over dense-only for the weak embedding model, and nearly closes
+the gap back to dense-alone for the strong one (while still beating it on
+`doc_hit@5`) — see `reports/retrieval_mode_comparison.md` for the full
+comparison and investigation.
 
 ### Layer 2 — Answer Correctness (deterministic + optional LLM judge)
 

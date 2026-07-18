@@ -2,16 +2,17 @@
 
 ## Current state
 
-- M9 implementation complete on branch `M9` (11 commits ahead of main, PR not yet raised).
-- 977 tests pass, 2 skipped (Ollama integration tests).
+- M9 implementation complete on branch `M9` (14 commits ahead of main, PR not yet raised).
+- 1002 tests pass, 2 skipped (Ollama integration tests).
 - `retrieve --mode {dense,lexical,hybrid,hybrid_reranked}` fully operational; `eval-retrieval` now reports nDCG@k alongside hit@k/MRR@k.
-- Live comparison run recorded on the real FinanceBench sample (46 questions, `nomic-embed-text` embeddings, real `BAAI/bge-reranker-base` reranker) — see `reports/retrieval_mode_comparison.md`.
+- Live comparison runs recorded on the real FinanceBench sample (46 questions) for **two** embedding models — `nomic-embed-text` and `granite-embedding:278m` — with the real `BAAI/bge-reranker-base` reranker, now GPU-accelerated. See `reports/retrieval_mode_comparison.md`.
+- Post-M9.10 follow-up work: diagnosed and fixed a real regression where hybrid retrieval was *hurting* a strong embedding model (see "Fusion weighting investigation" below).
 
 ## Latest milestone
 
-**M9: Hybrid Retrieval — BM25 + RRF + Cross-Encoder Reranking + nDCG** — all 10 sub-milestones complete, built test-first (one tracer-bullet-then-loop TDD cycle per sub-milestone, one commit each).
+**M9: Hybrid Retrieval — BM25 + RRF + Cross-Encoder Reranking + nDCG** — all 10 sub-milestones complete, built test-first (one tracer-bullet-then-loop TDD cycle per sub-milestone, one commit each), followed by a post-M9.10 investigation and fix once the real comparison surfaced a problem.
 
-Key deliverables:
+Key deliverables (M9.1–M9.10):
 
 - `retrieval_scoring.py` — `ndcg_at_k()`, `score_ndcg()`, `summarize_ndcg()` (M9.1); wired into `eval_retrieval.score_retrieval_run` output, the rich retrieval report, and `compare-runs --metric` (M9.2), all additive to the existing schema.
 - `lexical_index.py` — `BM25Config` + `BM25Index` (Okapi BM25, Lucene-style non-negative IDF floor), built in-memory from `chunk_metadata.jsonl` (M9.3).
@@ -21,36 +22,61 @@ Key deliverables:
 - CLI: `retrieve --mode {dense,lexical,hybrid,hybrid_reranked} --candidate-k --fusion-k --reranker-config` (M9.8). Scope note: `PipelineConfig`/`RetrievalConfig` YAML schema changes for the `--config`-driven retrieve path were deferred — not covered by M9.8's acceptance criteria.
 - `configs/evaluation/rag_modes.yaml` — added `rag_hybrid`/`rag_reranked` (context_source: retrieved_chunks, reusing the `rag_dense_v2` prompt); real end-to-end mock-LLM + mock-reranker pipeline tests replace the old placeholder enum test (M9.9).
 - `pyproject.toml` — added the `rerank` optional dependency group (`torch`, `transformers`, `peft`) that M9.6's design called for but was missed until M9.10 exposed the gap.
-- `reports/retrieval_mode_comparison.md` — real dense vs. hybrid vs. hybrid_reranked comparison (M9.10, see table below).
+- `reports/retrieval_mode_comparison.md` — real dense vs. hybrid vs. hybrid_reranked comparison (M9.10).
 
-## Real-data comparison (46 FinanceBench sample questions, nomic-embed-text)
+Post-M9.10 follow-up work:
 
-| Mode | doc_hit@10 | MRR@10 (doc) | evidence_text_ndcg@10 |
+- `LocalRerankerClient` now auto-detects CUDA and moves the model + input tensors to GPU, falling back to CPU (`_select_device()`, injectable/stubbable — tests never need real GPU hardware). Real speedup on this machine: bge-reranker-base over 46 questions × 50 candidates went from **~11 min (CPU) to ~1.6 min (GPU)** — verified numerically identical output on both.
+- `HybridRetriever` gained `dense_weight`/`lexical_weight`, threaded into `reciprocal_rank_fusion`'s pre-existing (previously unused) `weights` param, plus CLI `--dense-weight`/`--lexical-weight` flags.
+- `EmbeddingConfig` gained `fusion_dense_weight`/`fusion_lexical_weight` (default 1.0/1.0). `retrieve`'s weight flags now default to `None` and fall back to the embedding config's calibrated values when omitted — hybrid mode picks the right ratio automatically per embedding model.
+
+## Fusion weighting investigation
+
+**Trigger:** M9.10's real-data comparison showed `hybrid` helping nomic (roughly doubling `doc_hit@10`) but *hurting* granite (`doc_hit@1` dropped from 0.587 dense-alone to 0.457 hybrid). Root cause: `reciprocal_rank_fusion` is pure rank-based and discards score magnitude — a confident dense-rank-1 hit gets exactly the same vote as a marginal one, so an equally-weighted noisy BM25 top pick (financial filings are full of repeated boilerplate) can outrank it.
+
+**`fusion_k` sweep (10, 20, vs. default 60) — negative result.** The default (60) was tied-best or best for granite `hybrid`; lowering it didn't close the gap. For `hybrid_reranked`, `fusion_k` had **zero** effect on any metric for either embedding — the cross-encoder reranker fully overrides the RRF-fused order.
+
+**Weight ratio sweep (dense:lexical = 1:1, 2:1, 3:1, 5:1) — positive result, opposite optima per model.** Granite improves monotonically through 3:1 (`doc_hit@1` 0.457→0.565, `doc_mrr@10` 0.620→0.709, `doc_hit@5` at 3:1 even *exceeds* dense-alone: 0.978 vs 0.935), then 5:1 overshoots slightly. Nomic gets monotonically *worse* as `dense_weight` increases (`doc_mrr@10` 0.249→0.184 by 3:1) — its dense signal is weak enough that lexical's full-strength vote is what's helping. **No single global ratio works for both** — this has to be per-embedding-model.
+
+**Fix shipped and verified end-to-end:** calibrated defaults now live in `configs/embedding/ollama_nomic.yaml` (1:1) and `configs/embedding/ollama_granite.yaml` (3:1); `retrieve --mode hybrid` picks the right ratio automatically with zero extra flags — confirmed a bare run against the granite config reproduces the 3:1 sweep numbers exactly (`doc_hit@1`=0.565, `doc_mrr@10`=0.709, both bit-for-bit matches).
+
+**Known follow-up, not yet done:** `hybrid_reranked` shares the same `HybridRetriever` construction, so it now also picks up calibrated weights automatically going forward — but the granite `hybrid_reranked` row in `reports/retrieval_mode_comparison.md` still reflects the pre-calibration 1:1 internal fusion and hasn't been re-run. Unlike `fusion_k` (confirmed zero effect on `hybrid_reranked`), weight changes are large enough to plausibly shift which chunks land in the reranker's candidate pool — untested.
+
+## Real-data comparison (46 FinanceBench sample questions)
+
+**nomic-embed-text:**
+
+| Mode | doc_hit@10 | doc_mrr@10 | evidence_text_ndcg@10 |
 |---|---|---|---|
 | dense | 0.326 | 0.119 | 0.000 |
-| hybrid (BM25 + RRF) | 0.652 | 0.249 | 0.011 |
-| hybrid_reranked (bge-reranker-base) | 0.717 | 0.452 | 0.000 |
+| hybrid (1:1, calibrated default) | 0.652 | 0.249 | 0.011 |
+| hybrid_reranked | 0.717 | 0.452 | 0.000 |
 
-Hybrid retrieval roughly doubles doc-level hit rate over dense-only; reranking
-further concentrates the correct document at a higher rank (MRR nearly
-quadruples over dense). `evidence_text_ndcg@10` stays near zero across all
-three modes on this small sample — consistent with the project's already-known
-FinanceBench table-extraction gap, not a new finding.
+**granite-embedding:278m:**
+
+| Mode | doc_hit@1 | doc_hit@10 | doc_mrr@10 |
+|---|---|---|---|
+| dense | 0.587 | 0.978 | 0.713 |
+| hybrid, unweighted 1:1 (original M9.10 baseline, no longer the default) | 0.457 | 0.978 | 0.620 |
+| hybrid, 3:1 (calibrated default) | 0.565 | 0.978 | 0.709 |
+
+`evidence_text_ndcg@10` stays low across all modes and both embeddings on this small sample — consistent with the project's already-known FinanceBench table-extraction gap, not a new finding.
 
 ## Next step
 
 1. **Raise and merge M9 PR** — branch is clean, all tests pass.
-2. **M10 (fine-tuned reranker)** — the seam is ready: train a LoRA adapter for `bge-reranker-base`, load it via `RerankerConfig.adapter_path` / `LocalRerankerClient`, compare against the pretrained baseline recorded here.
-3. **M13 (Snowflake embedding comparison)** — can reuse the same hybrid/reranked retrieval modes against a different base embedding model without new plumbing.
-4. **Fix the grounding-analysis context gap** (spawned as a separate task, not fixed in M9): `run_rag_from_config` writes `context_chunk_ids` (list of IDs) into `rag_predictions.jsonl`, but `analyze_grounding` reads `retrieved_chunks` (list of {chunk_id, text} dicts) — the key names don't match, so citation/context-sufficiency checks silently see empty context on every real `run-rag` → `analyze-grounding` run. Existing tests never caught this because they hand-build `rag_predictions.jsonl` fixtures with `retrieved_chunks` already present.
+2. **Re-run `hybrid_reranked` for granite with 3:1 calibrated weights** — check whether it changes the reranker's candidate pool (the one thing not yet verified from the fusion weighting investigation).
+3. **M10 (fine-tuned reranker)** — the seam is ready: train a LoRA adapter for `bge-reranker-base`, load it via `RerankerConfig.adapter_path` / `LocalRerankerClient`, compare against the pretrained baseline recorded here. GPU support means iteration on this will be much faster than the original CPU-only path.
+4. **M13 (Snowflake embedding comparison)** — can reuse the same hybrid/reranked retrieval modes, but will need its own calibrated `fusion_dense_weight`/`fusion_lexical_weight` via the same sweep process.
+5. **Fix the grounding-analysis context gap** (spawned as a separate task, not fixed in M9): `run_rag_from_config` writes `context_chunk_ids` (list of IDs) into `rag_predictions.jsonl`, but `analyze_grounding` reads `retrieved_chunks` (list of {chunk_id, text} dicts) — the key names don't match, so citation/context-sufficiency checks silently see empty context on every real `run-rag` → `analyze-grounding` run. Existing tests never caught this because they hand-build `rag_predictions.jsonl` fixtures with `retrieved_chunks` already present.
 
 ## Known risks or blockers
 
 - The grounding-analysis field-name gap above predates M9 but was only noticed while wiring M9.9's end-to-end pipeline test; it means no `analyze-grounding` run on real (non-fixture) data has ever actually seen retrieved context.
 - `reports/retrieval_mode_comparison.md` is committed as an intentional exception to the `reports/*.md` gitignore rule (curated, small, reviewable — per AGENTS.md's allowance for intentionally curated documentation).
-- `evidence_text_ndcg@10` is a very strict, low-frequency metric on this 46-question sample (most runs saw 0 exact evidence-text matches); don't over-read the dense-vs-hybrid comparison on that single metric — `doc_hit@10` and `doc_mrr@10` are the more informative columns here.
-
-**Fixed post-M9.10:** `compare-runs`' table used to show `—` for `mode`/`model`/`mrr@10` on retrieval-only runs (it only read `run_metadata.json`, a RAG-run file, and a nonexistent `mrr@10` key) and picked "best run" by the requested `--metric` alone with no tie-breaking. `report_loader.load_run_data` now also loads `retrieval_run_metadata.json`; `compare-runs` falls back to it for `mode`/`model`, falls back to `doc_mrr@10` for the `mrr@10` column, and tie-breaks best-run selection on `doc_hit@10` then `doc_mrr@10` after the requested metric. `reports/retrieval_mode_comparison.md` was regenerated with the fix.
+- `evidence_text_ndcg@10` is a very strict, low-frequency metric on this 46-question sample (most runs saw 0 exact evidence-text matches); don't over-read any dense-vs-hybrid comparison on that single metric — `doc_hit@k` and `doc_mrr@10` are the more informative columns here.
+- The granite `hybrid_reranked` comparison numbers predate the fusion-weight calibration fix (see "Known follow-up" above) — treat that specific row as stale until re-run.
+- `compare-runs`' table only surfaces `evidence_hit@10`/`doc_hit@10`/`mrr@10`/`accuracy` columns; for retrieval-only runs it now falls back to `retrieval_run_metadata.json` for `mode`/`model` and to `doc_mrr@10` for the `mrr@10` column (fixed post-M9.10), and best-run selection tie-breaks on `doc_hit@10` then `doc_mrr@10` after the requested `--metric`.
 
 ## Safe next commands
 
@@ -62,27 +88,27 @@ pytest -q
 git push origin M9
 gh pr create --title "feat(M9): hybrid retrieval (BM25 + RRF + reranking) and nDCG" --body "..."
 
-# Re-run the three-mode comparison from scratch
-# Note: --mode/--candidate-k/--fusion-k/--reranker-config only exist on the
-# individual-flags path below, not the --config pipeline-config path (M9.8 scope decision).
-COMMON="--index-dir data/indexes/financebench \
+# Re-run hybrid mode with calibrated defaults (no --dense-weight/--lexical-weight needed)
+python -m financebench_eval retrieve \
+  --index-dir "data/indexes/financebench/granite-embedding:278m" \
   --questions data/processed/financebench/examples.jsonl \
-  --embedding-config configs/embedding/ollama_nomic.yaml \
-  --chunks-path data/processed/financebench/chunks.jsonl --top-k 10"
+  --embedding-config configs/embedding/ollama_granite.yaml \
+  --chunks-path data/processed/financebench/chunks.jsonl \
+  --output runs/<run_id>/retrieval_results.jsonl \
+  --run-id <run_id> --mode hybrid --top-k 10
 
-python -m financebench_eval retrieve $COMMON --run-id dense_check \
-  --output runs/dense_check/retrieval_results.jsonl --mode dense
-python -m financebench_eval retrieve $COMMON --run-id hybrid_check \
-  --output runs/hybrid_check/retrieval_results.jsonl --mode hybrid
-python -m financebench_eval retrieve $COMMON --run-id reranked_check \
-  --output runs/reranked_check/retrieval_results.jsonl \
-  --mode hybrid_reranked --reranker-config configs/reranker/bge_base_local.yaml
+# The follow-up not yet done: re-run hybrid_reranked for granite with calibrated weights
+python -m financebench_eval retrieve \
+  --index-dir "data/indexes/financebench/granite-embedding:278m" \
+  --questions data/processed/financebench/examples.jsonl \
+  --embedding-config configs/embedding/ollama_granite.yaml \
+  --chunks-path data/processed/financebench/chunks.jsonl \
+  --output runs/<run_id>/retrieval_results.jsonl \
+  --run-id <run_id> --mode hybrid_reranked \
+  --reranker-config configs/reranker/bge_base_local.yaml --top-k 10
 
-python -m financebench_eval eval-retrieval --config configs/retrieval.yaml --run-id dense_check
-python -m financebench_eval eval-retrieval --config configs/retrieval.yaml --run-id hybrid_check
-python -m financebench_eval eval-retrieval --config configs/retrieval.yaml --run-id reranked_check
-
-python -m financebench_eval compare-runs \
-  --runs runs/dense_check runs/hybrid_check runs/reranked_check \
-  --metric evidence_text_ndcg@10 --output reports/retrieval_mode_comparison.md
+# Score any granite run (configs/retrieval_granite.yaml points index_dir/embedding
+# at the granite index so leaderboard/report metadata is accurate, unlike the
+# nomic-tagged default configs/retrieval.yaml)
+python -m financebench_eval eval-retrieval --config configs/retrieval_granite.yaml --run-id <run_id>
 ```
