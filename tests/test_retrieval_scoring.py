@@ -9,15 +9,18 @@ import pytest
 from financebench_eval_harness.retrieval_scoring import (
     answerable_hit,
     doc_hit,
+    evidence_coverage_hit,
     evidence_text_hit,
     ndcg_at_k,
     normalize_doc_name,
     page_hit,
+    score_evidence_coverage_hit,
     score_evidence_overlap,
     score_hit_at_k,
     score_ndcg,
     score_rank_metrics,
     score_retrieval_result,
+    summarize_evidence_coverage_hit,
     summarize_hit_at_k,
     summarize_ndcg,
     summarize_rank_metrics,
@@ -153,6 +156,129 @@ def test_evidence_text_hit_respects_custom_threshold() -> None:
 
 def test_evidence_text_hit_false_when_retrieved_list_empty() -> None:
     assert evidence_text_hit({"retrieved": []}, _GOLD_WITH_TEXT) is False
+
+
+# ---------------------------------------------------------------------------
+# M9.11 — evidence_coverage_hit: asymmetric coverage over concatenated top-k
+# ---------------------------------------------------------------------------
+
+_GOLD_THREE_TOKENS = {
+    "evidence": [{"doc_name": "3M_2018_10K", "gold_page_num": 60, "evidence_text": "alpha beta gamma"}]
+}
+
+# Contains all 3 evidence tokens, diluted by unrelated noise tokens — Jaccard
+# (symmetric) fails here because the union is inflated by the noise, but
+# coverage (evidence tokens found / evidence tokens total) should not care.
+_RESULT_DILUTED_SINGLE_CHUNK = {
+    "retrieved": [
+        {
+            "rank": 1,
+            "doc_name": "3M_2018_10K.pdf",
+            "page_num": 60,
+            "score": 0.9,
+            "text": "alpha beta gamma noise1 noise2 noise3 noise4 noise5 noise6 noise7",
+        }
+    ]
+}
+
+_GOLD_EIGHT_TOKENS = {
+    "evidence": [
+        {
+            "doc_name": "3M_2018_10K",
+            "gold_page_num": 60,
+            "evidence_text": "alpha beta gamma delta epsilon zeta eta theta",
+        }
+    ]
+}
+
+# Evidence is split across two adjacent chunks — neither alone reaches 50%
+# coverage, but the two concatenated do.
+_RESULT_EVIDENCE_SPLIT_ACROSS_CHUNKS = {
+    "retrieved": [
+        {"rank": 1, "doc_name": "3M_2018_10K.pdf", "page_num": 60, "score": 0.9, "text": "alpha beta gamma"},
+        {"rank": 2, "doc_name": "3M_2018_10K.pdf", "page_num": 60, "score": 0.8, "text": "delta epsilon zeta"},
+    ]
+}
+
+
+def test_evidence_coverage_hit_true_when_single_chunk_contains_all_evidence_tokens_despite_noise() -> None:
+    assert evidence_coverage_hit(_RESULT_DILUTED_SINGLE_CHUNK, _GOLD_THREE_TOKENS) is True
+
+
+def test_evidence_text_hit_false_for_same_diluted_chunk_demonstrating_the_gap() -> None:
+    # Same fixture as above: symmetric Jaccard is diluted by the noise tokens
+    # and misses what coverage correctly finds.
+    assert evidence_text_hit(_RESULT_DILUTED_SINGLE_CHUNK, _GOLD_THREE_TOKENS) is False
+
+
+def test_evidence_coverage_hit_false_per_chunk_but_true_when_concatenated() -> None:
+    # Neither individual chunk reaches the threshold...
+    single_chunk_1 = {"retrieved": [_RESULT_EVIDENCE_SPLIT_ACROSS_CHUNKS["retrieved"][0]]}
+    single_chunk_2 = {"retrieved": [_RESULT_EVIDENCE_SPLIT_ACROSS_CHUNKS["retrieved"][1]]}
+    assert evidence_coverage_hit(single_chunk_1, _GOLD_EIGHT_TOKENS) is False
+    assert evidence_coverage_hit(single_chunk_2, _GOLD_EIGHT_TOKENS) is False
+    # ...but concatenating both top-k chunks pushes coverage over 50%.
+    assert evidence_coverage_hit(_RESULT_EVIDENCE_SPLIT_ACROSS_CHUNKS, _GOLD_EIGHT_TOKENS) is True
+
+
+def test_evidence_coverage_hit_false_when_no_overlap() -> None:
+    result = {"retrieved": [{"rank": 1, "doc_name": "other.pdf", "page_num": 1, "score": 0.5, "text": "unrelated text entirely"}]}
+    assert evidence_coverage_hit(result, _GOLD_THREE_TOKENS) is False
+
+
+def test_evidence_coverage_hit_respects_custom_threshold() -> None:
+    result = {"retrieved": [{"rank": 1, "doc_name": "other.pdf", "page_num": 1, "score": 0.5, "text": "alpha"}]}
+    assert evidence_coverage_hit(result, _GOLD_THREE_TOKENS, threshold=0.0) is True
+    assert evidence_coverage_hit(result, _GOLD_THREE_TOKENS, threshold=0.5) is False
+
+
+def test_evidence_coverage_hit_top_k_limits_chunks_considered() -> None:
+    # Chunk 2 (which completes the evidence) is beyond top_k=1.
+    assert evidence_coverage_hit(_RESULT_EVIDENCE_SPLIT_ACROSS_CHUNKS, _GOLD_EIGHT_TOKENS, top_k=1) is False
+    assert evidence_coverage_hit(_RESULT_EVIDENCE_SPLIT_ACROSS_CHUNKS, _GOLD_EIGHT_TOKENS, top_k=2) is True
+
+
+def test_evidence_coverage_hit_false_when_retrieved_list_empty() -> None:
+    assert evidence_coverage_hit({"retrieved": []}, _GOLD_THREE_TOKENS) is False
+
+
+def test_score_evidence_coverage_hit_returns_expected_keys() -> None:
+    scores = score_evidence_coverage_hit(_RESULT_EVIDENCE_SPLIT_ACROSS_CHUNKS, _GOLD_EIGHT_TOKENS, ks=(1, 2, 5))
+    assert set(scores.keys()) == {"evidence_coverage_hit@1", "evidence_coverage_hit@2", "evidence_coverage_hit@5"}
+    assert all(isinstance(v, bool) for v in scores.values())
+
+
+def test_score_evidence_coverage_hit_correct_values_per_k() -> None:
+    scores = score_evidence_coverage_hit(_RESULT_EVIDENCE_SPLIT_ACROSS_CHUNKS, _GOLD_EIGHT_TOKENS, ks=(1, 2))
+    assert scores["evidence_coverage_hit@1"] is False
+    assert scores["evidence_coverage_hit@2"] is True
+
+
+def test_score_evidence_coverage_hit_default_ks_produces_four_k_values() -> None:
+    scores = score_evidence_coverage_hit(_RESULT_EVIDENCE_SPLIT_ACROSS_CHUNKS, _GOLD_EIGHT_TOKENS)
+    assert set(scores.keys()) == {
+        "evidence_coverage_hit@1", "evidence_coverage_hit@5",
+        "evidence_coverage_hit@10", "evidence_coverage_hit@20",
+    }
+
+
+def test_summarize_evidence_coverage_hit_counts_and_rates() -> None:
+    scores = [
+        {"evidence_coverage_hit@1": True, "evidence_coverage_hit@5": True},
+        {"evidence_coverage_hit@1": False, "evidence_coverage_hit@5": True},
+    ]
+    summary = summarize_evidence_coverage_hit(scores, ks=(1, 5))
+    assert summary["example_count"] == 2
+    assert summary["evidence_coverage_hit@1_count"] == 1
+    assert summary["evidence_coverage_hit@1_rate"] == 0.5
+    assert summary["evidence_coverage_hit@5_count"] == 2
+    assert summary["evidence_coverage_hit@5_rate"] == 1.0
+
+
+def test_summarize_evidence_coverage_hit_empty_list() -> None:
+    summary = summarize_evidence_coverage_hit([], ks=(1, 5, 10, 20))
+    assert summary["example_count"] == 0
+    assert summary["evidence_coverage_hit@1_rate"] == 0.0
 
 
 # ---------------------------------------------------------------------------

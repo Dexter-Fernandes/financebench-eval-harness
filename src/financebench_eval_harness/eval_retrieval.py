@@ -19,10 +19,12 @@ import yaml
 
 from financebench_eval_harness.pipeline_config import PipelineConfig
 from financebench_eval_harness.retrieval_scoring import (
+    score_evidence_coverage_hit,
     score_evidence_overlap,
     score_hit_at_k,
     score_ndcg,
     score_rank_metrics,
+    summarize_evidence_coverage_hit,
     summarize_hit_at_k,
     summarize_ndcg,
     summarize_rank_metrics,
@@ -72,6 +74,7 @@ def score_retrieval_run(
         row.update(score_rank_metrics(result, gold, overlap_threshold=config.evidence_overlap_threshold))
         row.update(score_evidence_overlap(result, gold, threshold=config.evidence_overlap_threshold, top_k=config.top_k))
         row.update(score_ndcg(result, gold, ks=ks, overlap_threshold=config.evidence_overlap_threshold))
+        row.update(score_evidence_coverage_hit(result, gold, ks=ks, threshold=config.evidence_overlap_threshold))
         row["failure_labels"] = _compute_failure_labels(row, config.top_k, config.good_rank_threshold)
         per_question.append(row)
 
@@ -80,8 +83,9 @@ def score_retrieval_run(
     hit_summary = summarize_hit_at_k(per_question, ks=ks)
     rank_summary = summarize_rank_metrics(per_question, ks=ks)
     ndcg_summary = summarize_ndcg(per_question, ks=ks)
+    coverage_summary = summarize_evidence_coverage_hit(per_question, ks=ks)
     label_counts = _count_failure_labels(per_question)
-    summary = {**hit_summary, **rank_summary, **ndcg_summary, **label_counts}
+    summary = {**hit_summary, **rank_summary, **ndcg_summary, **coverage_summary, **label_counts}
 
     (run_dir / "retrieval_summary.json").write_text(
         json.dumps(summary, indent=2), encoding="utf-8"
@@ -89,7 +93,9 @@ def score_retrieval_run(
 
     _save_config_snapshot(config, run_dir / "retrieval_eval_config.yaml")
 
-    leaderboard = _build_leaderboard_summary(per_question, hit_summary, rank_summary, ndcg_summary, config, run_dir.name)
+    leaderboard = _build_leaderboard_summary(
+        per_question, hit_summary, rank_summary, ndcg_summary, coverage_summary, config, run_dir.name
+    )
     (run_dir / "retrieval_leaderboard.json").write_text(
         json.dumps(leaderboard, indent=2), encoding="utf-8"
     )
@@ -190,6 +196,7 @@ def _build_leaderboard_summary(
     hit_summary: dict,
     rank_summary: dict,
     ndcg_summary: dict,
+    coverage_summary: dict,
     config: PipelineConfig,
     run_id: str,
 ) -> dict:
@@ -207,6 +214,7 @@ def _build_leaderboard_summary(
         "evidence_text_hit@k": hit_summary.get(f"evidence_text_hit@{k}_rate", 0.0),
         "mrr@k": rank_summary.get(f"doc_mrr@{k}", 0.0),
         "evidence_text_ndcg@k": ndcg_summary.get(f"evidence_text_ndcg@{k}", 0.0),
+        "evidence_coverage_hit@k": coverage_summary.get(f"evidence_coverage_hit@{k}_rate", 0.0),
         "mean_best_evidence_overlap": mean_overlap,
         "median_first_doc_hit_rank": rank_summary.get("doc_median_first_hit_rank"),
         "median_first_page_hit_rank": rank_summary.get("page_median_first_hit_rank"),
@@ -282,6 +290,7 @@ def _render_rich_retrieval_report(
         f"| evidence_text_hit@k | {_fmt(leaderboard.get('evidence_text_hit@k'))} |",
         f"| mrr@k | {_fmt(leaderboard.get('mrr@k'))} |",
         f"| evidence_text_ndcg@k | {_fmt(leaderboard.get('evidence_text_ndcg@k'))} |",
+        f"| evidence_coverage_hit@k | {_fmt(leaderboard.get('evidence_coverage_hit@k'))} |",
         f"| mean_best_evidence_overlap | {_fmt(leaderboard.get('mean_best_evidence_overlap'))} |",
         f"| median_first_doc_hit_rank | {_fmt(leaderboard.get('median_first_doc_hit_rank'))} |",
         f"| median_first_page_hit_rank | {_fmt(leaderboard.get('median_first_page_hit_rank'))} |",

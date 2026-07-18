@@ -387,6 +387,33 @@ def test_score_retrieval_run_ndcg_additive_existing_keys_unchanged(tmp_path: Pat
     assert summary["doc_mrr@5"] == pytest.approx(1.0)
 
 
+def test_score_retrieval_run_row_contains_evidence_coverage_hit_keys(tmp_path: Path) -> None:
+    run_dir = _run_with_one_example(tmp_path)
+    rows = [json.loads(l) for l in (run_dir / "retrieval_scores.jsonl").read_text().splitlines() if l.strip()]
+    assert "evidence_coverage_hit@5" in rows[0]
+
+
+def test_retrieval_summary_json_contains_evidence_coverage_hit_keys(tmp_path: Path) -> None:
+    run_dir = _run_with_one_example(tmp_path)
+    d = json.loads((run_dir / "retrieval_summary.json").read_text())
+    assert "evidence_coverage_hit@5_rate" in d
+    assert "evidence_coverage_hit@5_count" in d
+
+
+def test_score_retrieval_run_evidence_coverage_hit_additive_existing_keys_unchanged(tmp_path: Path) -> None:
+    """Adding evidence_coverage_hit must not change any pre-existing row or summary keys/values."""
+    run_dir = _run_with_one_example(tmp_path)
+    rows = [json.loads(l) for l in (run_dir / "retrieval_scores.jsonl").read_text().splitlines() if l.strip()]
+    row = rows[0]
+    assert row["doc_hit@5"] is True
+    assert row["evidence_text_hit@5"] is True
+    assert row["doc_ndcg@5"] == pytest.approx(1.0)
+
+    summary = json.loads((run_dir / "retrieval_summary.json").read_text())
+    assert summary["doc_hit@5_rate"] == pytest.approx(1.0)
+    assert summary["evidence_text_hit@5_rate"] == pytest.approx(1.0)
+
+
 def test_score_retrieval_run_skips_questions_not_in_gold(tmp_path: Path) -> None:
     cfg = _make_config(tmp_path)
     run_dir = tmp_path / "run_001"
@@ -719,6 +746,13 @@ def test_leaderboard_contains_evidence_text_ndcg_at_k(tmp_path: Path) -> None:
     assert isinstance(d["evidence_text_ndcg@k"], float)
 
 
+def test_leaderboard_contains_evidence_coverage_hit_at_k(tmp_path: Path) -> None:
+    run_dir = _run_with_one_example(tmp_path)
+    d = _read_leaderboard(run_dir)
+    assert "evidence_coverage_hit@k" in d
+    assert isinstance(d["evidence_coverage_hit@k"], float)
+
+
 def test_leaderboard_contains_config_metadata(tmp_path: Path) -> None:
     run_dir = _run_with_one_example(tmp_path)
     d = _read_leaderboard(run_dir)
@@ -775,6 +809,11 @@ def test_rich_report_metrics_section_contains_mrr_at_k(tmp_path: Path) -> None:
 def test_rich_report_metrics_section_contains_ndcg_at_k(tmp_path: Path) -> None:
     content = _rich_report_content(tmp_path)
     assert "evidence_text_ndcg@k" in content
+
+
+def test_rich_report_metrics_section_contains_evidence_coverage_hit_at_k(tmp_path: Path) -> None:
+    content = _rich_report_content(tmp_path)
+    assert "evidence_coverage_hit@k" in content
 
 
 def test_rich_report_has_best_examples_section(tmp_path: Path) -> None:

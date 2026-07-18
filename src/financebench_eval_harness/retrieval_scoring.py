@@ -29,13 +29,16 @@ __all__ = [
     "doc_hit",
     "page_hit",
     "evidence_text_hit",
+    "evidence_coverage_hit",
     "answerable_hit",
     "score_retrieval_result",
     "score_hit_at_k",
+    "score_evidence_coverage_hit",
     "score_rank_metrics",
     "score_evidence_overlap",
     "summarize_retrieval_scores",
     "summarize_hit_at_k",
+    "summarize_evidence_coverage_hit",
     "summarize_rank_metrics",
     "ndcg_at_k",
     "score_ndcg",
@@ -391,6 +394,67 @@ def score_evidence_overlap(
         "best_evidence_overlap": best,
         "evidence_text_hit": best >= threshold,
     }
+
+
+# ---------------------------------------------------------------------------
+# evidence_coverage_hit@k — M9.11
+# ---------------------------------------------------------------------------
+
+
+def evidence_coverage_hit(
+    retrieval_result: dict,
+    gold_example: dict,
+    threshold: float = 0.5,
+    top_k: int | None = None,
+) -> bool:
+    """Return True if the concatenated top-k retrieved chunks sufficiently cover any gold evidence text.
+
+    Unlike evidence_text_hit (symmetric Jaccard against a single chunk), this
+    concatenates the top-k chunks and scores asymmetric coverage via
+    _evidence_overlap (evidence tokens found / evidence tokens total, with an
+    exact-substring shortcut) — so a chunk isn't penalized for unrelated
+    surrounding content, and evidence assembled across multiple adjacent
+    chunks (e.g. a financial statement table too long to fit in one chunk)
+    gets credit. threshold=0.5 by default.
+    """
+    chunks = _top_k_chunks(retrieval_result.get("retrieved", []), top_k)
+    if not chunks:
+        return False
+    concatenated_text = " ".join(chunk.get("text", "") for chunk in chunks)
+    return any(
+        _evidence_overlap(concatenated_text, ev["evidence_text"]) >= threshold
+        for ev in gold_example.get("evidence", [])
+    )
+
+
+def score_evidence_coverage_hit(
+    retrieval_result: dict,
+    gold_example: dict,
+    ks: tuple[int, ...] = _DEFAULT_KS,
+    threshold: float = 0.5,
+) -> dict[str, bool]:
+    """Compute evidence_coverage_hit@k for one question's retrieval result at each value of k."""
+    return {
+        f"evidence_coverage_hit@{k}": evidence_coverage_hit(
+            retrieval_result, gold_example, threshold=threshold, top_k=k
+        )
+        for k in ks
+    }
+
+
+def summarize_evidence_coverage_hit(
+    scores: list[dict],
+    ks: tuple[int, ...] = _DEFAULT_KS,
+) -> dict[str, object]:
+    """Aggregate per-question evidence_coverage_hit@k scores into counts and rates."""
+    n = len(scores)
+    summary: dict[str, object] = {"example_count": n}
+    for k in ks:
+        key = f"evidence_coverage_hit@{k}"
+        count = sum(1 for s in scores if s.get(key) is True)
+        summary[f"{key}_count"] = count
+        summary[f"{key}_rate"] = count / n if n else 0.0
+    return summary
 
 
 # ---------------------------------------------------------------------------
