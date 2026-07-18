@@ -146,6 +146,19 @@ FinanceBench table-extraction gap, not a new finding.
 hybrid/reranking help. The stronger it gets, the less headroom hybrid has —
 past some point (Octen), it adds none at all in absolute terms.
 
+## Table-aware chunking (option 3) — investigated, shelved
+
+Verified before implementing: sampled 9 pages, tested a line-density table
+heuristic. Finding: `pypdf.extract_text()` produces 3 incompatible line
+layouts across this corpus (3M: one cell per line; Adobe/AES/Activision/
+AMD/AmEx — the dominant style, 5/9 sampled: numbers embedded inline in
+prose lines, heuristic detects zero tables there; American Water Works: a
+whole table collapses onto one giant line with no internal newlines at
+all). Also a confirmed false positive on 3M's own Table-of-Contents page.
+Not a tuning problem — a single line-based heuristic can't cover this much
+per-filing format variance. Decided not to implement. Full detail in
+`docs/status.md`. Not code — no commit for this item.
+
 ## Next step
 
 1. **Raise and merge M9 PR** — branch is clean, all tests pass.

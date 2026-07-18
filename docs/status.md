@@ -325,6 +325,37 @@ result on any metric) — reranking's evidence-assembly benefit was
 completely invisible under the strict metric, which showed reranking
 *hurting* `evidence_text_hit@k` for every model.
 
+## Table-aware chunking — investigated, shelved (not implemented)
+
+Verified before writing any splitter logic (as planned): sampled 9 pages
+(6 known evidence-table pages across 6 filings, 3 false-positive probes)
+and tested a line-density table-detection heuristic against real
+`pages.jsonl` text. Finding: `pypdf.extract_text()` produces **three
+incompatible line layouts for tables across this corpus**, not one — a
+per-line "is this line just digits/currency" test works on 3M's
+one-cell-per-line style but fragments its own table into 8 disconnected
+regions without gap-tolerant merging; it detects **zero** regions on the
+dominant style (Adobe/AES/Activision Blizzard/AMD/AmEx — numbers embedded
+inline in normal prose lines, 5 of the 9 sampled pages); and it's
+structurally blind to American Water Works' style, where an entire table
+collapses onto one ~2,900-char line with no internal newlines at all. Also
+confirmed a real false positive: the same heuristic fires 4 spurious
+"table regions" on 3M's own Table-of-Contents index page, since TOC entries
+alternate short label/number lines just like 3M's real one-cell-per-line
+tables.
+
+Conclusion: this isn't a threshold-tuning problem — a single line-based
+heuristic operating on already-extracted flat text can't reliably cover a
+corpus with this much per-filing extraction-format variance. Decided not to
+implement option 3 as scoped. If evidence-span coverage needs further work
+beyond `evidence_coverage_hit@k` (M9.11), a real table-extraction library
+(pdfplumber) at the ingestion stage would address the root inconsistency
+directly rather than pattern-matching around it — previously ranked lower
+due to the risk that FinanceBench's own gold `evidence_text` looks
+pypdf-extracted already (so a cleaner extractor could reduce, not improve,
+token overlap with gold); that risk is unchanged by this finding and would
+still need its own verification spike before implementing.
+
 ## Next Steps
 
 1. Raise M9 PR and merge to main.
