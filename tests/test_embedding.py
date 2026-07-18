@@ -90,6 +90,24 @@ class TestEmbeddingConfig:
         assert cfg.normalize is False
         assert cfg.category == "cheap_api"
 
+    def test_fusion_dense_weight_defaults_to_one(self) -> None:
+        cfg = EmbeddingConfig(provider="mock", model_name="mock-embed")
+        assert cfg.fusion_dense_weight == pytest.approx(1.0)
+
+    def test_fusion_lexical_weight_defaults_to_one(self) -> None:
+        cfg = EmbeddingConfig(provider="mock", model_name="mock-embed")
+        assert cfg.fusion_lexical_weight == pytest.approx(1.0)
+
+    def test_fusion_weights_configurable(self) -> None:
+        cfg = EmbeddingConfig(
+            provider="ollama",
+            model_name="granite-embedding:278m",
+            fusion_dense_weight=3.0,
+            fusion_lexical_weight=1.0,
+        )
+        assert cfg.fusion_dense_weight == pytest.approx(3.0)
+        assert cfg.fusion_lexical_weight == pytest.approx(1.0)
+
 
 # ---------------------------------------------------------------------------
 # MockEmbeddingClient
@@ -298,3 +316,62 @@ class TestSentenceTransformersEmbeddingClient:
             ST_CONFIG, model_factory=_make_st_factory(fake_model)
         )
         assert client.embed_texts([]) == []
+
+
+# ---------------------------------------------------------------------------
+# load_embedding_config — fusion weight parsing
+# ---------------------------------------------------------------------------
+
+
+class TestLoadEmbeddingConfigFusionWeights:
+    def test_reads_fusion_weights_when_present(self, tmp_path) -> None:
+        from financebench_eval_harness.embedding import load_embedding_config
+
+        path = tmp_path / "granite.yaml"
+        path.write_text(
+            "\n".join([
+                "embedding:",
+                "  provider: ollama",
+                "  model_name: granite-embedding:278m",
+                "  fusion_dense_weight: 3.0",
+                "  fusion_lexical_weight: 1.0",
+            ]),
+            encoding="utf-8",
+        )
+        cfg = load_embedding_config(path)
+        assert cfg.fusion_dense_weight == pytest.approx(3.0)
+        assert cfg.fusion_lexical_weight == pytest.approx(1.0)
+
+    def test_fusion_weights_default_to_one_when_absent(self, tmp_path) -> None:
+        from financebench_eval_harness.embedding import load_embedding_config
+
+        path = tmp_path / "nomic.yaml"
+        path.write_text(
+            "\n".join([
+                "embedding:",
+                "  provider: ollama",
+                "  model_name: nomic-embed-text",
+            ]),
+            encoding="utf-8",
+        )
+        cfg = load_embedding_config(path)
+        assert cfg.fusion_dense_weight == pytest.approx(1.0)
+        assert cfg.fusion_lexical_weight == pytest.approx(1.0)
+
+    def test_repo_granite_config_has_calibrated_dense_weight(self) -> None:
+        from pathlib import Path
+
+        from financebench_eval_harness.embedding import load_embedding_config
+
+        cfg = load_embedding_config(Path("configs/embedding/ollama_granite.yaml"))
+        assert cfg.fusion_dense_weight == pytest.approx(3.0)
+        assert cfg.fusion_lexical_weight == pytest.approx(1.0)
+
+    def test_repo_nomic_config_has_equal_weights(self) -> None:
+        from pathlib import Path
+
+        from financebench_eval_harness.embedding import load_embedding_config
+
+        cfg = load_embedding_config(Path("configs/embedding/ollama_nomic.yaml"))
+        assert cfg.fusion_dense_weight == pytest.approx(1.0)
+        assert cfg.fusion_lexical_weight == pytest.approx(1.0)

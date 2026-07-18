@@ -5,3 +5,10 @@ embedding:
   timeout_seconds: 30.0
   batch_size: 256
   normalize: true
+
+  # Hybrid retrieval (RRF) fusion weights, calibrated on the 46-question
+  # FinanceBench sample (see docs/status.md). nomic's dense signal alone is
+  # weak (doc_hit@1=0.043), so lexical's full-strength vote is what makes
+  # hybrid help — equal weighting (1:1) was the best of {1:1, 2:1, 3:1, 5:1}.
+  fusion_dense_weight: 1.0
+  fusion_lexical_weight: 1.0

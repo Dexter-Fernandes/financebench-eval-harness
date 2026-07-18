@@ -1854,6 +1854,80 @@ def test_retrieve_command_hybrid_mode_custom_weights_recorded_in_metadata(tmp_pa
     assert meta["fusion"] == {"k": 60, "candidate_k": 50, "dense_weight": 3.0, "lexical_weight": 0.5}
 
 
+def test_retrieve_command_hybrid_mode_uses_embedding_config_fusion_weights_by_default(
+    tmp_path: Path, capsys
+) -> None:
+    """When --dense-weight/--lexical-weight are omitted, the embedding config's
+    calibrated fusion weights are used automatically instead of a flat 1.0/1.0."""
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    output_path = tmp_path / "results.jsonl"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    embedding_cfg.write_text(
+        "\n".join([
+            "embedding:",
+            "  provider: mock",
+            "  model_name: mock-embed",
+            "  batch_size: 32",
+            "  fusion_dense_weight: 3.0",
+            "  fusion_lexical_weight: 1.0",
+        ]),
+        encoding="utf-8",
+    )
+
+    exit_code = main([
+        "retrieve",
+        "--index-dir", str(index_dir),
+        "--questions", str(questions_path),
+        "--embedding-config", str(embedding_cfg),
+        "--output", str(output_path),
+        "--mode", "hybrid",
+    ])
+
+    assert exit_code == 0
+    meta = json.loads((tmp_path / "retrieval_run_metadata.json").read_text())
+    assert meta["fusion"] == {"k": 60, "candidate_k": 50, "dense_weight": 3.0, "lexical_weight": 1.0}
+
+
+def test_retrieve_command_hybrid_mode_explicit_weight_flags_override_embedding_config(
+    tmp_path: Path, capsys
+) -> None:
+    """Explicit --dense-weight/--lexical-weight CLI flags win over the
+    embedding config's calibrated defaults."""
+    index_dir = _build_test_index(tmp_path)
+    questions_path = tmp_path / "questions.jsonl"
+    embedding_cfg = tmp_path / "embedding.yaml"
+    output_path = tmp_path / "results.jsonl"
+    _write_questions_jsonl(questions_path, _SAMPLE_QUESTIONS)
+    embedding_cfg.write_text(
+        "\n".join([
+            "embedding:",
+            "  provider: mock",
+            "  model_name: mock-embed",
+            "  batch_size: 32",
+            "  fusion_dense_weight: 3.0",
+            "  fusion_lexical_weight: 1.0",
+        ]),
+        encoding="utf-8",
+    )
+
+    exit_code = main([
+        "retrieve",
+        "--index-dir", str(index_dir),
+        "--questions", str(questions_path),
+        "--embedding-config", str(embedding_cfg),
+        "--output", str(output_path),
+        "--mode", "hybrid",
+        "--dense-weight", "1.0",
+        "--lexical-weight", "1.0",
+    ])
+
+    assert exit_code == 0
+    meta = json.loads((tmp_path / "retrieval_run_metadata.json").read_text())
+    assert meta["fusion"] == {"k": 60, "candidate_k": 50, "dense_weight": 1.0, "lexical_weight": 1.0}
+
+
 def test_retrieve_command_lexical_mode_runs_end_to_end(tmp_path: Path, capsys) -> None:
     index_dir = _build_test_index(tmp_path)
     questions_path = tmp_path / "questions.jsonl"

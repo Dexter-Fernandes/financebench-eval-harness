@@ -380,14 +380,16 @@ def build_parser() -> argparse.ArgumentParser:
     retrieve_parser.add_argument(
         "--dense-weight",
         type=float,
-        default=1.0,
-        help="Weight given to dense rankings in RRF for hybrid/hybrid_reranked modes (default: 1.0).",
+        default=None,
+        help="Weight given to dense rankings in RRF for hybrid/hybrid_reranked modes "
+             "(default: the embedding config's fusion_dense_weight, or 1.0).",
     )
     retrieve_parser.add_argument(
         "--lexical-weight",
         type=float,
-        default=1.0,
-        help="Weight given to lexical (BM25) rankings in RRF for hybrid/hybrid_reranked modes (default: 1.0).",
+        default=None,
+        help="Weight given to lexical (BM25) rankings in RRF for hybrid/hybrid_reranked modes "
+             "(default: the embedding config's fusion_lexical_weight, or 1.0).",
     )
 
     inspect_parser = subparsers.add_parser(
@@ -1200,11 +1202,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             from financebench_eval_harness.hybrid_retriever import run_retrieval_with_retriever
 
             try:
+                dense_weight = (
+                    args.dense_weight if args.dense_weight is not None
+                    else embedding_config.fusion_dense_weight
+                )
+                lexical_weight = (
+                    args.lexical_weight if args.lexical_weight is not None
+                    else embedding_config.fusion_lexical_weight
+                )
                 retriever, fusion_meta, reranker_meta = _build_retriever(
                     args.mode, store, embedding_client,
                     candidate_k=args.candidate_k, fusion_k=args.fusion_k,
                     reranker_config_path=args.reranker_config,
-                    dense_weight=args.dense_weight, lexical_weight=args.lexical_weight,
+                    dense_weight=dense_weight, lexical_weight=lexical_weight,
                 )
             except (RerankerConfigError, RerankerProviderError) as exc:
                 print(str(exc), file=sys.stderr)

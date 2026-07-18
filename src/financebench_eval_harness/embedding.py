@@ -27,6 +27,12 @@ class EmbeddingConfig:
     dimensions: int | None = None
     normalize: bool = True
     category: str | None = None
+    # Calibrated per-model defaults for hybrid retrieval's RRF fusion (M9).
+    # A weaker embedding model benefits from lexical's full-strength vote
+    # (1:1); a stronger one needs dense upweighted so lexical noise doesn't
+    # outrank an already-confident dense hit (see docs/status.md).
+    fusion_dense_weight: float = 1.0
+    fusion_lexical_weight: float = 1.0
 
 
 class EmbeddingClient(Protocol):
@@ -290,6 +296,8 @@ def load_embedding_config(config_path: str | Path) -> EmbeddingConfig:
         dimensions=int(section["dimensions"]) if "dimensions" in section else None,
         normalize=bool(section.get("normalize", True)),
         category=section.get("category"),
+        fusion_dense_weight=float(section.get("fusion_dense_weight", 1.0)),
+        fusion_lexical_weight=float(section.get("fusion_lexical_weight", 1.0)),
     )
 
 
