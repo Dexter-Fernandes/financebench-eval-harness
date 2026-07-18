@@ -149,14 +149,29 @@ per embedding model with zero extra flags, verified end-to-end (a bare
 exactly). Explicit `--dense-weight`/`--lexical-weight` still override the
 config when passed.
 
-**Known follow-up:** `hybrid_reranked` shares `HybridRetriever`'s
+**Follow-up resolved:** `hybrid_reranked` shares `HybridRetriever`'s
 construction, so it now also picks up calibrated weights automatically. We
-confirmed `fusion_k` has zero effect on `hybrid_reranked`'s final metrics,
-but we have **not** verified whether `dense_weight`/`lexical_weight` behaves
-the same way — weight changes are large enough to plausibly shift which
-chunks land in the reranker's candidate pool, unlike `fusion_k`. The granite
-`hybrid_reranked` row in `reports/retrieval_mode_comparison.md` still
-reflects the pre-calibration 1:1 internal fusion and hasn't been re-run.
+confirmed `fusion_k` has zero effect on `hybrid_reranked`'s final metrics —
+but re-running granite `hybrid_reranked` with the 3:1 calibrated weights
+shows `dense_weight`/`lexical_weight` behaves *differently*: it does change
+the final results, but the effect is **mixed, not a clean win**:
+
+| Variant | doc_hit@1 | doc_hit@5 | doc_hit@10 | doc_hit@20 | doc_mrr@10 |
+|---|---|---|---|---|---|
+| dense-alone | 0.587 | 0.935 | 0.978 | 0.978 | 0.713 |
+| hybrid_reranked, unweighted 1:1 | 0.522 | 0.913 | 0.978 | 0.978 | 0.657 |
+| hybrid_reranked, 3:1 (calibrated) | 0.543 | 0.870 | 0.957 | **1.000** | 0.673 |
+
+`doc_hit@1` and `doc_mrr@10` both nudge up modestly, and `doc_hit@20` reaches
+a perfect 1.000 (now exceeding dense-alone) — but `doc_hit@5` and
+`doc_hit@10` both get *worse*. Reweighting the fusion stage does change which
+chunks land in the reranker's top-`candidate_k` pool as hypothesized, but the
+reranker's own behavior on the reweighted pool doesn't uniformly track the
+plain-`hybrid` improvement — some correct-but-marginal dense candidates
+apparently get displaced at some ranks before the reranker ever sees them.
+Net: a small win on `doc_mrr@10`, but not the clean 3:1 win seen in plain
+`hybrid` mode. `reports/retrieval_mode_comparison.md` now reflects the
+re-run 3:1 numbers for granite `hybrid_reranked`.
 
 ## Next Steps
 
@@ -167,10 +182,10 @@ reflects the pre-calibration 1:1 internal fusion and hasn't been re-run.
    retrieval modes against a different base embedding model — will need its
    own calibrated `fusion_dense_weight`/`fusion_lexical_weight`, following the
    same sweep process documented above.
-4. Re-run `hybrid_reranked` for granite with the 3:1 calibrated weights and
-   confirm whether it changes the candidate pool the reranker sees (see
-   "Known follow-up" above — `fusion_k` was confirmed to have zero effect,
-   but weight changes haven't been checked).
+4. Consider whether `hybrid_reranked`'s mixed result (see "Follow-up
+   resolved" above) warrants its own weight calibration separate from plain
+   `hybrid` — the 3:1 ratio tuned for `hybrid` isn't obviously optimal once a
+   reranker sits downstream of it; would need its own small sweep.
 5. Known gap (tracked separately, not fixed in M9): `rag_predictions.jsonl`
    writes `context_chunk_ids` but `analyze_grounding` reads `retrieved_chunks`,
    so citation/context-sufficiency checks silently see empty context on real

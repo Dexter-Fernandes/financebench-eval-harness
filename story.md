@@ -40,7 +40,15 @@ Post-M9.10 follow-up work:
 
 **Fix shipped and verified end-to-end:** calibrated defaults now live in `configs/embedding/ollama_nomic.yaml` (1:1) and `configs/embedding/ollama_granite.yaml` (3:1); `retrieve --mode hybrid` picks the right ratio automatically with zero extra flags — confirmed a bare run against the granite config reproduces the 3:1 sweep numbers exactly (`doc_hit@1`=0.565, `doc_mrr@10`=0.709, both bit-for-bit matches).
 
-**Known follow-up, not yet done:** `hybrid_reranked` shares the same `HybridRetriever` construction, so it now also picks up calibrated weights automatically going forward — but the granite `hybrid_reranked` row in `reports/retrieval_mode_comparison.md` still reflects the pre-calibration 1:1 internal fusion and hasn't been re-run. Unlike `fusion_k` (confirmed zero effect on `hybrid_reranked`), weight changes are large enough to plausibly shift which chunks land in the reranker's candidate pool — untested.
+**Follow-up resolved:** re-ran granite `hybrid_reranked` with the 3:1 calibrated weights (applied automatically via the embedding config, confirmed in `retrieval_run_metadata.json`). Unlike `fusion_k` (confirmed zero effect), `dense_weight`/`lexical_weight` **does** change `hybrid_reranked`'s final results — but the effect is mixed, not a clean win:
+
+| Variant | doc_hit@1 | doc_hit@5 | doc_hit@10 | doc_hit@20 | doc_mrr@10 |
+|---|---|---|---|---|---|
+| dense-alone | 0.587 | 0.935 | 0.978 | 0.978 | 0.713 |
+| hybrid_reranked, unweighted 1:1 | 0.522 | 0.913 | 0.978 | 0.978 | 0.657 |
+| hybrid_reranked, 3:1 (calibrated) | 0.543 | 0.870 | 0.957 | **1.000** | 0.673 |
+
+`doc_hit@1`/`doc_mrr@10` nudge up, `doc_hit@20` reaches a perfect 1.000 (exceeding dense-alone), but `doc_hit@5`/`doc_hit@10` get *worse*. Reweighting fusion does change which chunks reach the reranker's candidate pool as hypothesized, but the reranker's behavior on the reweighted pool doesn't uniformly track plain `hybrid`'s clean 3:1 win — worth a separate weight sweep for `hybrid_reranked` specifically rather than assuming `hybrid`'s tuned ratio transfers.
 
 ## Real-data comparison (46 FinanceBench sample questions)
 
@@ -65,7 +73,7 @@ Post-M9.10 follow-up work:
 ## Next step
 
 1. **Raise and merge M9 PR** — branch is clean, all tests pass.
-2. **Re-run `hybrid_reranked` for granite with 3:1 calibrated weights** — check whether it changes the reranker's candidate pool (the one thing not yet verified from the fusion weighting investigation).
+2. **Consider a separate weight sweep for `hybrid_reranked`** — now that we know 3:1 (tuned for plain `hybrid`) gives `hybrid_reranked` a mixed result (small `doc_mrr@10` win, `doc_hit@5`/`@10` regressions), it may need its own calibrated ratio rather than inheriting `hybrid`'s.
 3. **M10 (fine-tuned reranker)** — the seam is ready: train a LoRA adapter for `bge-reranker-base`, load it via `RerankerConfig.adapter_path` / `LocalRerankerClient`, compare against the pretrained baseline recorded here. GPU support means iteration on this will be much faster than the original CPU-only path.
 4. **M13 (Snowflake embedding comparison)** — can reuse the same hybrid/reranked retrieval modes, but will need its own calibrated `fusion_dense_weight`/`fusion_lexical_weight` via the same sweep process.
 5. **Fix the grounding-analysis context gap** (spawned as a separate task, not fixed in M9): `run_rag_from_config` writes `context_chunk_ids` (list of IDs) into `rag_predictions.jsonl`, but `analyze_grounding` reads `retrieved_chunks` (list of {chunk_id, text} dicts) — the key names don't match, so citation/context-sufficiency checks silently see empty context on every real `run-rag` → `analyze-grounding` run. Existing tests never caught this because they hand-build `rag_predictions.jsonl` fixtures with `retrieved_chunks` already present.
@@ -75,7 +83,7 @@ Post-M9.10 follow-up work:
 - The grounding-analysis field-name gap above predates M9 but was only noticed while wiring M9.9's end-to-end pipeline test; it means no `analyze-grounding` run on real (non-fixture) data has ever actually seen retrieved context.
 - `reports/retrieval_mode_comparison.md` is committed as an intentional exception to the `reports/*.md` gitignore rule (curated, small, reviewable — per AGENTS.md's allowance for intentionally curated documentation).
 - `evidence_text_ndcg@10` is a very strict, low-frequency metric on this 46-question sample (most runs saw 0 exact evidence-text matches); don't over-read any dense-vs-hybrid comparison on that single metric — `doc_hit@k` and `doc_mrr@10` are the more informative columns here.
-- The granite `hybrid_reranked` comparison numbers predate the fusion-weight calibration fix (see "Known follow-up" above) — treat that specific row as stale until re-run.
+- The granite `hybrid_reranked` row in `reports/retrieval_mode_comparison.md` now reflects the 3:1 calibrated re-run (see "Follow-up resolved" above), not the original M9.10 1:1 baseline.
 - `compare-runs`' table only surfaces `evidence_hit@10`/`doc_hit@10`/`mrr@10`/`accuracy` columns; for retrieval-only runs it now falls back to `retrieval_run_metadata.json` for `mode`/`model` and to `doc_mrr@10` for the `mrr@10` column (fixed post-M9.10), and best-run selection tie-breaks on `doc_hit@10` then `doc_mrr@10` after the requested `--metric`.
 
 ## Safe next commands
@@ -97,7 +105,8 @@ python -m financebench_eval retrieve \
   --output runs/<run_id>/retrieval_results.jsonl \
   --run-id <run_id> --mode hybrid --top-k 10
 
-# The follow-up not yet done: re-run hybrid_reranked for granite with calibrated weights
+# hybrid_reranked with calibrated 3:1 weights (already re-run once — see
+# "Follow-up resolved" above; mixed result, doc_mrr@10 up, doc_hit@5/@10 down)
 python -m financebench_eval retrieve \
   --index-dir "data/indexes/financebench/granite-embedding:278m" \
   --questions data/processed/financebench/examples.jsonl \

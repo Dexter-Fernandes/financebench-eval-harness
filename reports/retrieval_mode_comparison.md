@@ -8,7 +8,7 @@ Sorted by: `doc_mrr@10`
 | --- | --- | --- | --- | --- | --- | --- |
 | m9_10_granite_dense ★ | dense | granite-embedding:278m | — | 0.196 | 0.978 | 0.713 |
 | dw3lw1_granite_hybrid | hybrid | granite-embedding:278m | — | 0.217 | 0.978 | 0.709 |
-| m9_10_granite_hybrid_reranked | hybrid_reranked | granite-embedding:278m | — | 0.043 | 0.978 | 0.657 |
+| granite_hybrid_reranked_3to1 | hybrid_reranked | granite-embedding:278m | — | 0.022 | 0.957 | 0.673 |
 | m9_10_hybrid_reranked | hybrid_reranked | nomic-embed-text | — | 0.000 | 0.717 | 0.452 |
 | m9_10_hybrid | hybrid | nomic-embed-text | — | 0.022 | 0.652 | 0.249 |
 | m9_10_dense | dense | nomic-embed-text | — | 0.000 | 0.326 | 0.119 |
@@ -32,14 +32,26 @@ Sorted by: `doc_mrr@10`
   (0.709 vs 0.713) and slightly exceeds it on `doc_hit@5` (0.978 vs 0.935,
   not shown in this table — see `docs/status.md`).
 
-**Known gap:** `hybrid_reranked` shares the same `HybridRetriever`
-construction, so it also picks up these calibrated weights automatically
-going forward. `m9_10_granite_hybrid_reranked` above predates the
-calibration work and still reflects unweighted (1:1) internal fusion —
-it has not been re-run with the 3:1 default. Separately, we confirmed
-`fusion_k` (the RRF decay constant) has *zero* effect on `hybrid_reranked`'s
-final metrics (the cross-encoder reranker fully overrides the fused order),
-but we have not verified whether `dense_weight`/`lexical_weight` affects
-`hybrid_reranked` the same way — weight changes are large enough to
-plausibly shift *which* chunks land in the top-`candidate_k` pool the
-reranker sees, unlike `fusion_k`. Worth checking in a follow-up.
+## `hybrid_reranked` with calibrated weights — a mixed result
+
+`granite_hybrid_reranked_3to1` above is the re-run with the 3:1 calibrated
+weights (confirmed applied automatically via `retrieval_run_metadata.json`).
+Unlike `fusion_k` (confirmed to have *zero* effect on `hybrid_reranked`'s
+final metrics, since the cross-encoder reranker fully overrides the fused
+order), `dense_weight`/`lexical_weight` **does** change the final results —
+but not cleanly:
+
+| Variant | doc_hit@1 | doc_hit@5 | doc_hit@10 | doc_hit@20 | doc_mrr@10 |
+|---|---|---|---|---|---|
+| dense-alone | 0.587 | 0.935 | 0.978 | 0.978 | 0.713 |
+| hybrid_reranked, unweighted 1:1 (original M9.10 baseline) | 0.522 | 0.913 | 0.978 | 0.978 | 0.657 |
+| hybrid_reranked, 3:1 (calibrated, this table's row) | 0.543 | 0.870 | 0.957 | **1.000** | 0.673 |
+
+`doc_hit@1`/`doc_mrr@10` nudge up and `doc_hit@20` reaches a perfect 1.000
+(now exceeding dense-alone), but `doc_hit@5`/`doc_hit@10` both get *worse*.
+Reweighting fusion does shift which chunks land in the reranker's top-50
+candidate pool as hypothesized, but the reranker's own behavior on that
+reweighted pool doesn't uniformly track plain `hybrid`'s clean 3:1 win. The
+3:1 ratio was tuned for plain `hybrid`, not for what happens once a reranker
+sits downstream of it — `hybrid_reranked` likely needs its own calibration
+sweep rather than inheriting `hybrid`'s ratio.
