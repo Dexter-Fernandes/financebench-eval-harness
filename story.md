@@ -48,8 +48,9 @@ FinanceBench table-extraction gap, not a new finding.
 
 - The grounding-analysis field-name gap above predates M9 but was only noticed while wiring M9.9's end-to-end pipeline test; it means no `analyze-grounding` run on real (non-fixture) data has ever actually seen retrieved context.
 - `reports/retrieval_mode_comparison.md` is committed as an intentional exception to the `reports/*.md` gitignore rule (curated, small, reviewable — per AGENTS.md's allowance for intentionally curated documentation).
-- `compare-runs`' table only surfaces `evidence_hit@10`/`doc_hit@10`/`mrr@10`/`accuracy` columns, and reads `mode`/`model`/`accuracy` from a RAG run's `run_metadata.json` — retrieval-only runs (no RAG generation) don't have that file, so those columns show `—` and the `mrr@10` column is blank too (the real key is `doc_mrr@10`, not `mrr@10`). Not fixed here since compare-runs predates M9 and this is a display-only gap; the underlying `retrieval_summary.json` has the real numbers.
 - `evidence_text_ndcg@10` is a very strict, low-frequency metric on this 46-question sample (most runs saw 0 exact evidence-text matches); don't over-read the dense-vs-hybrid comparison on that single metric — `doc_hit@10` and `doc_mrr@10` are the more informative columns here.
+
+**Fixed post-M9.10:** `compare-runs`' table used to show `—` for `mode`/`model`/`mrr@10` on retrieval-only runs (it only read `run_metadata.json`, a RAG-run file, and a nonexistent `mrr@10` key) and picked "best run" by the requested `--metric` alone with no tie-breaking. `report_loader.load_run_data` now also loads `retrieval_run_metadata.json`; `compare-runs` falls back to it for `mode`/`model`, falls back to `doc_mrr@10` for the `mrr@10` column, and tie-breaks best-run selection on `doc_hit@10` then `doc_mrr@10` after the requested metric. `reports/retrieval_mode_comparison.md` was regenerated with the fix.
 
 ## Safe next commands
 
