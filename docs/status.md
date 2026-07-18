@@ -5,8 +5,9 @@
 - M9 complete on branch `M9` — PR not yet raised.
 - 1002 tests pass, 2 skipped (Ollama integration tests).
 - Full pipeline operational through hybrid retrieval (BM25 + RRF + cross-encoder reranking) and nDCG scoring.
-- Live comparison run recorded on the real FinanceBench sample corpus (46 questions, `nomic-embed-text` and `granite-embedding:278m`, `BAAI/bge-reranker-base` reranker) — see `reports/retrieval_mode_comparison.md`.
+- Live comparison run recorded on the real FinanceBench sample corpus (46 questions) across **three** embedding models — `nomic-embed-text`, `granite-embedding:278m` (both via Ollama), and `Octen-Embedding-0.6B` (local HuggingFace `sentence-transformers`) — with the real `BAAI/bge-reranker-base` reranker. See `reports/retrieval_mode_comparison.md`.
 - Post-M9.10 follow-up: `HybridRetriever`'s RRF fusion now supports `dense_weight`/`lexical_weight`, calibrated per embedding model (see "Fusion Weighting Investigation" below), and `LocalRerankerClient` auto-detects CUDA (falls back to CPU) — a real GPU cut reranking time on 46 questions from ~11 min to ~1.6 min.
+- Confirmed the existing `SentenceTransformersEmbeddingClient` provider (already in `embedding.py`, previously unused against a real model) supports local HuggingFace embedding models with zero code changes — see "Local HuggingFace Embedding Models" below for what it took to actually get one running on this GPU.
 
 ## Current Engineering Milestone
 
@@ -88,7 +89,118 @@ modes for both embedding models — exact evidence-text matching is rare in
 this small sample, consistent with the known FinanceBench table-extraction
 gap already tracked by this project's failure-label analysis.
 
+### Octen-Embedding-0.6B (strongest dense baseline — hybrid doesn't help here)
+
+| Mode | doc_hit@1 | doc_hit@10 | MRR@10 (doc) |
+|---|---|---|---|
+| dense | **0.696** | 0.978 | **0.797** |
+| hybrid, 10:1 dense:lexical (best of what was tested) | 0.630 | 0.957 | 0.756 |
+| hybrid_reranked (10:1) | 0.587 | 0.957 | 0.695 |
+
+The strongest dense baseline of the three models tested — beats granite
+despite being a different model class. Unlike granite, **no fusion weight
+ratio recovers dense-alone performance here** (tested 1:1 through 10:1; see
+"Local HuggingFace Embedding Models" below for the full sweep). Dense-alone
+is simply the better retrieval mode for this model on this corpus.
+
 Full tables with all metrics in `reports/retrieval_mode_comparison.md`.
+
+## Local HuggingFace Embedding Models (Octen-Embedding-0.6B)
+
+**Goal:** add a third embedding model to the comparison, this time a local
+HuggingFace model rather than an Ollama-served one, to test whether the
+existing embedding pipeline could support that at all.
+
+**Feasibility check — no new code needed.** `embedding.py` already had a
+`SentenceTransformersEmbeddingClient` (lazy-imports `sentence_transformers`,
+same pattern as `LocalRerankerClient`), already wired through
+`EmbeddingConfig`, `load_embedding_config` (`provider: sentence_transformers`),
+and `cli.py`'s `_build_embedding_client` — just never exercised against a
+real model in this repo. GPU device placement is handled natively by the
+`sentence-transformers` library itself (unlike the reranker, which needed
+explicit `.to(device)` calls since it uses raw `transformers.AutoModel`).
+Added a new `local-embed` optional dependency group
+(`sentence-transformers`, `bitsandbytes`) to `pyproject.toml`.
+
+**First attempt failed on hardware, not code.** The original target,
+`Octen/Octen-Embedding-4B-INT8` (bitsandbytes INT8-quantized, ~4GB), loaded
+fine but failed on the first real embedding call:
+```
+RuntimeError: cublasLt ran into an error!
+cuBLAS API failed with status 15
+```
+Root cause: this GPU (GTX 1660 Ti) reports CUDA compute capability 7.5 (same
+number as RTX 20-series "Turing" cards) but — unlike the RTX 20-series —
+**lacks actual INT8 Tensor Cores**; Nvidia cut them from the GTX 16-series
+for cost. `bitsandbytes`' INT8 matmul kernels require real Tensor Core
+support this card doesn't have. Not fixable by batch size or retries — a
+fixed hardware limitation. Confirmed via `torch.cuda.get_device_capability()`
+and cross-referencing the GTX 1660 Ti's known lack of Tensor Cores.
+
+**Switched to `Octen/Octen-Embedding-0.6B`** (same family, no quantization,
+~1.2GB in bf16 — well within budget). No query-side instruction prefix
+required per the model's own usage docs (plain symmetric `encode()` calls,
+matching how this harness already treats all embedding providers).
+
+**Batch size took three tries to get right** — worth recording since the
+naive estimate was wrong twice:
+- `batch_size=32` (matching nomic/granite's Ollama batch sizes): OOM
+  immediately. Actual measured footprint (~4.9GB) was far higher than the
+  naive fp32-weights estimate (~2.4GB) suggested.
+- `batch_size=4`: safe (~2.3GB), but painfully slow — after ~55 minutes with
+  no completion in sight, CPU time (a proxy for actual work done) was only
+  ~9% of wall-clock time, meaning per-batch Python/CUDA kernel-launch
+  overhead dominated over actual computation at that batch size.
+- `batch_size=16`: safe (~4.0GB), meaningfully faster, but was interrupted
+  mid-run for `batch_size=24` before finishing (see below).
+- `batch_size=24`: ran at a tight but stable margin (~5.14GB used, ~600MB
+  free) for the full 46-minute build with no OOM. **This is what actually
+  built the index** (16,248 chunks, `data/indexes/financebench/octen-embedding-0.6b/`).
+
+Corrected the two-point linear VRAM model along the way: `memory ≈ 1.73GB +
+batch_size × 0.142GB`, derived from the `batch_size=4`/`batch_size=16` data
+points, which correctly predicted the `batch_size=32` OOM (~6.27GB predicted
+vs. ~5.61GB usable) and gave a theoretical ceiling of ~27 — consistent with
+24 working and 32 failing. Also corrected an earlier wrong assumption: the
+model loads in bf16/fp16 (2 bytes/param), not fp32 (4 bytes/param) as
+initially guessed — the fp32 estimate alone exceeded the *entire* measured
+`batch_size=4` footprint, which was impossible if that guess had been right.
+
+**Weight sweep went further than granite's and found a different shape.**
+Same process as granite (dense:lexical ratios via `--dense-weight`/
+`--lexical-weight`), but the results kept improving well past 5:1, so the
+sweep was extended to 7:1 and 10:1:
+
+| Ratio | doc_hit@1 | doc_hit@5 | doc_mrr@10 |
+|---|---|---|---|
+| dense-alone | 0.696 | 0.957 | 0.797 |
+| 1:1 | 0.391 | 0.696 | 0.537 |
+| 2:1 | 0.435 | 0.826 | 0.592 |
+| 3:1 | 0.565 | 0.870 | 0.683 |
+| 5:1 | 0.630 | 0.870 | 0.734 |
+| 7:1 | 0.630 | 0.935 | 0.749 |
+| 10:1 | 0.630 | **0.957** | 0.756 |
+
+`doc_hit@1` plateaued exactly at 0.630 from 5:1 onward (three ratios with no
+further movement); `doc_mrr@10` gains shrank steadily (+0.015 at 5→7, +0.007
+at 7→10) — approaching an asymptote *below* dense-alone (0.797), not
+converging to it. Unlike granite (peaked and started declining by 5:1),
+Octen's curve never turns over within the tested range, but it also never
+reaches dense-alone. **Calibrated at 10:1** (best tested) in
+`configs/embedding/octen_0.6b_local.yaml`, with an explicit note in that
+config that dense-alone outperforms every hybrid ratio tried for this model.
+
+`hybrid_reranked` (10:1) shows the same mixed pattern already seen with
+granite: `doc_hit@20` reaches a perfect 1.000, but `doc_hit@1`/`doc_hit@5`/
+`doc_mrr@10` all regress relative to plain `hybrid`, let alone dense-alone.
+
+**Full three-model comparison in `reports/retrieval_mode_comparison.md`.**
+
+**Queued next:** `nvidia/Nemotron-3-Embed-1B-BF16` at `batch_size=6` (math
+extrapolated from Octen's corrected linear VRAM model, scaled for
+Nemotron's larger size (1.14B params) and wider embeddings (2048 vs 1024
+dim); ~9.8 theoretical max batch size, starting conservative at 6). Not yet
+started as of this writeup.
 
 ## Fusion Weighting Investigation (post-M9.10)
 
@@ -176,17 +288,22 @@ re-run 3:1 numbers for granite `hybrid_reranked`.
 ## Next Steps
 
 1. Raise M9 PR and merge to main.
-2. M10 (fine-tuned reranker): train a LoRA adapter for `bge-reranker-base` and
+2. **Queued:** `nvidia/Nemotron-3-Embed-1B-BF16` at `batch_size=6` as a fourth
+   embedding model — see "Local HuggingFace Embedding Models" above for the
+   VRAM math. Not yet started.
+3. M10 (fine-tuned reranker): train a LoRA adapter for `bge-reranker-base` and
    load it via `RerankerConfig.adapter_path` — the seam is already in place.
-3. M13 (Snowflake embedding comparison) can reuse the same hybrid/reranked
+4. M13 (Snowflake embedding comparison) can reuse the same hybrid/reranked
    retrieval modes against a different base embedding model — will need its
    own calibrated `fusion_dense_weight`/`fusion_lexical_weight`, following the
-   same sweep process documented above.
-4. Consider whether `hybrid_reranked`'s mixed result (see "Follow-up
+   same sweep process documented above (now proven across three models:
+   nomic, granite, Octen).
+5. Consider whether `hybrid_reranked`'s mixed result (see "Follow-up
    resolved" above) warrants its own weight calibration separate from plain
-   `hybrid` — the 3:1 ratio tuned for `hybrid` isn't obviously optimal once a
-   reranker sits downstream of it; would need its own small sweep.
-5. Known gap (tracked separately, not fixed in M9): `rag_predictions.jsonl`
+   `hybrid` — the ratio tuned for `hybrid` isn't obviously optimal once a
+   reranker sits downstream of it; would need its own small sweep, for both
+   granite and Octen.
+6. Known gap (tracked separately, not fixed in M9): `rag_predictions.jsonl`
    writes `context_chunk_ids` but `analyze_grounding` reads `retrieved_chunks`,
    so citation/context-sufficiency checks silently see empty context on real
    `run-rag` output. Needs a fix before grounding analysis numbers on real runs
@@ -237,4 +354,6 @@ python -m financebench_eval report-rag \
 - Local datasets, PDFs, vector stores, model caches, secrets, and run artefacts stay out of version control.
 - `reports/*.md` gitignored by default; `reports/retrieval_mode_comparison.md` is an intentional exception — a small, curated, reviewable comparison table committed per the AGENTS.md rule allowing curated documentation.
 - `rerank` is an optional dependency group (`pip install .[rerank]`) — torch/transformers/peft, only needed for the local cross-encoder reranker provider.
+- `local-embed` is an optional dependency group (`pip install .[local-embed]`) — sentence-transformers/bitsandbytes, only needed for local HuggingFace embedding models (`provider: sentence_transformers`).
 - Do not publish benchmark claims until backed by reproducible runs with committed configuration.
+- This GPU (GTX 1660 Ti) cannot run `bitsandbytes` INT8-quantized models — it lacks real Tensor Cores despite reporting compute capability 7.5. Any `-INT8`-suffixed HuggingFace model should be assumed incompatible unless verified otherwise.

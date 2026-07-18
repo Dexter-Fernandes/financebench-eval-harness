@@ -2,11 +2,11 @@
 
 ## Current state
 
-- M9 implementation complete on branch `M9` (14 commits ahead of main, PR not yet raised).
+- M9 implementation complete on branch `M9` (many commits ahead of main, PR not yet raised).
 - 1002 tests pass, 2 skipped (Ollama integration tests).
 - `retrieve --mode {dense,lexical,hybrid,hybrid_reranked}` fully operational; `eval-retrieval` now reports nDCG@k alongside hit@k/MRR@k.
-- Live comparison runs recorded on the real FinanceBench sample (46 questions) for **two** embedding models — `nomic-embed-text` and `granite-embedding:278m` — with the real `BAAI/bge-reranker-base` reranker, now GPU-accelerated. See `reports/retrieval_mode_comparison.md`.
-- Post-M9.10 follow-up work: diagnosed and fixed a real regression where hybrid retrieval was *hurting* a strong embedding model (see "Fusion weighting investigation" below).
+- Live comparison runs recorded on the real FinanceBench sample (46 questions) for **three** embedding models — `nomic-embed-text`, `granite-embedding:278m` (both Ollama), and `Octen-Embedding-0.6B` (local HuggingFace `sentence-transformers`, GPU) — with the real `BAAI/bge-reranker-base` reranker, also GPU-accelerated. See `reports/retrieval_mode_comparison.md`.
+- Post-M9.10 follow-up work: diagnosed and fixed a real regression where hybrid retrieval was *hurting* a strong embedding model (see "Fusion weighting investigation" below), then extended the whole pipeline to local HuggingFace embedding models and found the calibration story has a third shape: for the strongest embedding model tested, hybrid never beats dense-alone at any weight (see "Local HuggingFace embedding models" below).
 
 ## Latest milestone
 
@@ -50,9 +50,45 @@ Post-M9.10 follow-up work:
 
 `doc_hit@1`/`doc_mrr@10` nudge up, `doc_hit@20` reaches a perfect 1.000 (exceeding dense-alone), but `doc_hit@5`/`doc_hit@10` get *worse*. Reweighting fusion does change which chunks reach the reranker's candidate pool as hypothesized, but the reranker's behavior on the reweighted pool doesn't uniformly track plain `hybrid`'s clean 3:1 win — worth a separate weight sweep for `hybrid_reranked` specifically rather than assuming `hybrid`'s tuned ratio transfers.
 
+## Local HuggingFace embedding models
+
+Added a third embedding model, `Octen/Octen-Embedding-0.6B`, this time local
+HuggingFace rather than Ollama-served — to test whether the pipeline could
+support that at all. Full narrative and VRAM math in `docs/status.md`'s
+"Local HuggingFace Embedding Models" section; short version:
+
+- **No new code needed.** `embedding.py`'s `SentenceTransformersEmbeddingClient`
+  was already fully wired (provider, config loading, CLI) but never
+  exercised against a real model. Added a `local-embed` optional dependency
+  group (`sentence-transformers`, `bitsandbytes`) to `pyproject.toml`.
+- **Original target (`Octen-Embedding-4B-INT8`) failed on hardware, not
+  code**: `cuBLAS API failed with status 15` — the GTX 1660 Ti reports CUDA
+  compute capability 7.5 but, unlike RTX 20-series cards with the same
+  number, lacks real INT8 Tensor Cores, which `bitsandbytes`' INT8 kernels
+  require. Fixed hardware limitation, not something batch size or retries
+  could fix. Switched to the non-quantized `Octen-Embedding-0.6B` instead.
+- **Batch size took three tries**: 32 → OOM (actual footprint ~4.9GB, far
+  above a naive fp32 estimate), 4 → safe but ~9% CPU utilization (kernel
+  launch overhead dominated, no completion after ~55 min), 24 → stable at
+  the edge (~600MB free) for the full 46-minute build. A corrected two-point
+  linear VRAM model (`1.73GB + batch_size × 0.142GB`, and correcting the
+  bf16-not-fp32 weight-dtype assumption along the way) predicted the
+  `batch_size=32` OOM and a ~27 theoretical ceiling, consistent with what
+  was observed.
+- **Weight sweep found a third shape.** Octen's dense-alone is the
+  *strongest* baseline of all three models (`doc_hit@1`=0.696, beating even
+  granite) — and unlike granite, **no ratio from 1:1 through 10:1 fully
+  recovers dense-alone performance**. `doc_hit@1` plateaus at 0.630 from 5:1
+  onward; `doc_mrr@10` gains shrink toward an asymptote below dense-alone
+  (0.797), never reaching it. Calibrated at 10:1 (best tested), with an
+  explicit note in `configs/embedding/octen_0.6b_local.yaml` that dense-alone
+  is simply the better choice for this model on this corpus.
+- **Queued next:** `nvidia/Nemotron-3-Embed-1B-BF16` at `batch_size=6`
+  (extrapolated VRAM math in `docs/status.md`) — not started yet.
+
 ## Real-data comparison (46 FinanceBench sample questions)
 
-**nomic-embed-text:**
+**nomic-embed-text** (weakest dense baseline — hybrid/reranking help the most):
 
 | Mode | doc_hit@10 | doc_mrr@10 | evidence_text_ndcg@10 |
 |---|---|---|---|
@@ -60,7 +96,7 @@ Post-M9.10 follow-up work:
 | hybrid (1:1, calibrated default) | 0.652 | 0.249 | 0.011 |
 | hybrid_reranked | 0.717 | 0.452 | 0.000 |
 
-**granite-embedding:278m:**
+**granite-embedding:278m** (strong dense baseline — hybrid nearly matches it at 3:1):
 
 | Mode | doc_hit@1 | doc_hit@10 | doc_mrr@10 |
 |---|---|---|---|
@@ -68,23 +104,40 @@ Post-M9.10 follow-up work:
 | hybrid, unweighted 1:1 (original M9.10 baseline, no longer the default) | 0.457 | 0.978 | 0.620 |
 | hybrid, 3:1 (calibrated default) | 0.565 | 0.978 | 0.709 |
 
-`evidence_text_ndcg@10` stays low across all modes and both embeddings on this small sample — consistent with the project's already-known FinanceBench table-extraction gap, not a new finding.
+**Octen-Embedding-0.6B** (strongest dense baseline — hybrid never catches up):
+
+| Mode | doc_hit@1 | doc_hit@10 | doc_mrr@10 |
+|---|---|---|---|
+| dense | **0.696** | 0.978 | **0.797** |
+| hybrid, 10:1 (calibrated default, best tested) | 0.630 | 0.957 | 0.756 |
+| hybrid_reranked (10:1) | 0.587 | 0.957 | 0.695 |
+
+`evidence_text_ndcg@10` stays low across all modes and all three embeddings
+on this small sample — consistent with the project's already-known
+FinanceBench table-extraction gap, not a new finding.
+
+**Pattern across all three:** the weaker the dense baseline, the more
+hybrid/reranking help. The stronger it gets, the less headroom hybrid has —
+past some point (Octen), it adds none at all in absolute terms.
 
 ## Next step
 
 1. **Raise and merge M9 PR** — branch is clean, all tests pass.
-2. **Consider a separate weight sweep for `hybrid_reranked`** — now that we know 3:1 (tuned for plain `hybrid`) gives `hybrid_reranked` a mixed result (small `doc_mrr@10` win, `doc_hit@5`/`@10` regressions), it may need its own calibrated ratio rather than inheriting `hybrid`'s.
-3. **M10 (fine-tuned reranker)** — the seam is ready: train a LoRA adapter for `bge-reranker-base`, load it via `RerankerConfig.adapter_path` / `LocalRerankerClient`, compare against the pretrained baseline recorded here. GPU support means iteration on this will be much faster than the original CPU-only path.
-4. **M13 (Snowflake embedding comparison)** — can reuse the same hybrid/reranked retrieval modes, but will need its own calibrated `fusion_dense_weight`/`fusion_lexical_weight` via the same sweep process.
-5. **Fix the grounding-analysis context gap** (spawned as a separate task, not fixed in M9): `run_rag_from_config` writes `context_chunk_ids` (list of IDs) into `rag_predictions.jsonl`, but `analyze_grounding` reads `retrieved_chunks` (list of {chunk_id, text} dicts) — the key names don't match, so citation/context-sufficiency checks silently see empty context on every real `run-rag` → `analyze-grounding` run. Existing tests never caught this because they hand-build `rag_predictions.jsonl` fixtures with `retrieved_chunks` already present.
+2. **Run `nvidia/Nemotron-3-Embed-1B-BF16` at `batch_size=6`** — queued, not started. Full extrapolated VRAM math in `docs/status.md`.
+3. **Consider a separate weight sweep for `hybrid_reranked`** — 3:1 (granite) and 10:1 (Octen), both tuned for plain `hybrid`, give `hybrid_reranked` mixed results (small `doc_mrr@10` wins, `doc_hit@5`/`@10` regressions) for both models tested so far; may need its own calibrated ratio rather than inheriting `hybrid`'s.
+4. **M10 (fine-tuned reranker)** — the seam is ready: train a LoRA adapter for `bge-reranker-base`, load it via `RerankerConfig.adapter_path` / `LocalRerankerClient`, compare against the pretrained baseline recorded here. GPU support means iteration on this will be much faster than the original CPU-only path.
+5. **M13 (Snowflake embedding comparison)** — can reuse the same hybrid/reranked retrieval modes, but will need its own calibrated `fusion_dense_weight`/`fusion_lexical_weight` via the same sweep process, now proven across three very different models (Ollama-served and local HuggingFace).
+6. **Fix the grounding-analysis context gap** (spawned as a separate task, not fixed in M9): `run_rag_from_config` writes `context_chunk_ids` (list of IDs) into `rag_predictions.jsonl`, but `analyze_grounding` reads `retrieved_chunks` (list of {chunk_id, text} dicts) — the key names don't match, so citation/context-sufficiency checks silently see empty context on every real `run-rag` → `analyze-grounding` run. Existing tests never caught this because they hand-build `rag_predictions.jsonl` fixtures with `retrieved_chunks` already present.
 
 ## Known risks or blockers
 
 - The grounding-analysis field-name gap above predates M9 but was only noticed while wiring M9.9's end-to-end pipeline test; it means no `analyze-grounding` run on real (non-fixture) data has ever actually seen retrieved context.
 - `reports/retrieval_mode_comparison.md` is committed as an intentional exception to the `reports/*.md` gitignore rule (curated, small, reviewable — per AGENTS.md's allowance for intentionally curated documentation).
 - `evidence_text_ndcg@10` is a very strict, low-frequency metric on this 46-question sample (most runs saw 0 exact evidence-text matches); don't over-read any dense-vs-hybrid comparison on that single metric — `doc_hit@k` and `doc_mrr@10` are the more informative columns here.
-- The granite `hybrid_reranked` row in `reports/retrieval_mode_comparison.md` now reflects the 3:1 calibrated re-run (see "Follow-up resolved" above), not the original M9.10 1:1 baseline.
+- The granite `hybrid_reranked` row in `reports/retrieval_mode_comparison.md` reflects the 3:1 calibrated re-run (see "Follow-up resolved" above), not the original M9.10 1:1 baseline.
 - `compare-runs`' table only surfaces `evidence_hit@10`/`doc_hit@10`/`mrr@10`/`accuracy` columns; for retrieval-only runs it now falls back to `retrieval_run_metadata.json` for `mode`/`model` and to `doc_mrr@10` for the `mrr@10` column (fixed post-M9.10), and best-run selection tie-breaks on `doc_hit@10` then `doc_mrr@10` after the requested `--metric`.
+- This GPU (GTX 1660 Ti) cannot run `bitsandbytes` INT8-quantized models (no real Tensor Cores despite CC 7.5) — any `-INT8` HuggingFace model should be assumed incompatible unless verified otherwise.
+- The `Octen-Embedding-0.6B` index build required real batch-size trial and error (32 OOM'd, 4 was too slow, 24 worked) — the naive VRAM estimate from param count alone was wrong twice (wrong dtype assumption). See `docs/status.md` for the corrected linear model.
 
 ## Safe next commands
 
@@ -120,4 +173,27 @@ python -m financebench_eval retrieve \
 # at the granite index so leaderboard/report metadata is accurate, unlike the
 # nomic-tagged default configs/retrieval.yaml)
 python -m financebench_eval eval-retrieval --config configs/retrieval_granite.yaml --run-id <run_id>
+
+# Octen-Embedding-0.6B (local HuggingFace, GPU) — dense/hybrid modes only
+# need the embedding client, safe/fast; hybrid_reranked also loads
+# bge-reranker-base in the same process (confirmed no VRAM contention issue)
+python -m financebench_eval retrieve \
+  --index-dir "data/indexes/financebench/octen-embedding-0.6b" \
+  --questions data/processed/financebench/examples.jsonl \
+  --embedding-config configs/embedding/octen_0.6b_local.yaml \
+  --chunks-path data/processed/financebench/chunks.jsonl \
+  --output runs/<run_id>/retrieval_results.jsonl \
+  --run-id <run_id> --mode hybrid --top-k 10
+python -m financebench_eval eval-retrieval --config configs/retrieval_octen.yaml --run-id <run_id>
+
+# Rebuild the Octen index from scratch if needed (~46 min at batch_size=24 on
+# this GPU; use configs/retrieval.yaml for chunking settings, NOT the
+# standalone configs/retrieval/recursive_text_800.yaml which is missing
+# evidence_overlap_threshold and will error if passed to build-index directly)
+python -m financebench_eval build-index \
+  --pages data/processed/financebench/pages.jsonl \
+  --retrieval-config configs/retrieval.yaml \
+  --embedding-config configs/embedding/octen_0.6b_local.yaml \
+  --index-dir "data/indexes/financebench/octen-embedding-0.6b" \
+  --progress
 ```

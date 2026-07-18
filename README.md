@@ -135,17 +135,20 @@ FinanceBench ground-truth page numbers and PDF extraction page indices.
 composes dense (FAISS), lexical (in-repo BM25), hybrid (reciprocal rank fusion
 of both), and hybrid + cross-encoder reranking (mock/HTTP/local `bge-reranker-base`
 providers, auto-detects CUDA and falls back to CPU) behind one `Retriever`
-interface. Hybrid fusion weights dense vs. lexical rankings per embedding
-model — a weak dense model (`nomic-embed-text`) benefits from lexical's
-full-strength vote (1:1), while a strong one (`granite-embedding:278m`) needs
-dense upweighted (3:1) so lexical noise can't outrank an already-confident
-dense hit; these ratios are calibrated per model in
-`configs/embedding/ollama_*.yaml` and applied automatically. On the
-46-question FinanceBench sample, calibrated hybrid retrieval roughly doubles
-`doc_hit@10` over dense-only for the weak embedding model, and nearly closes
-the gap back to dense-alone for the strong one (while still beating it on
-`doc_hit@5`) — see `reports/retrieval_mode_comparison.md` for the full
-comparison and investigation.
+interface. Embeddings themselves are provider-agnostic too — Ollama-served
+(`nomic-embed-text`, `granite-embedding:278m`) or local HuggingFace
+`sentence-transformers` models (`Octen-Embedding-0.6B`), same `EmbeddingClient`
+seam either way. Hybrid fusion weights dense vs. lexical rankings per
+embedding model, calibrated automatically via `configs/embedding/*.yaml`'s
+`fusion_dense_weight`/`fusion_lexical_weight`: a weak dense model
+(`nomic-embed-text`) benefits from lexical's full-strength vote (1:1); a
+strong one (`granite-embedding:278m`) needs dense upweighted (3:1) so
+lexical noise can't outrank an already-confident dense hit and nearly
+recovers dense-alone performance; the strongest tested (`Octen-Embedding-0.6B`)
+never fully recovers dense-alone at any ratio (1:1 through 10:1) — for that
+model, dense-alone is simply the better mode. See
+`reports/retrieval_mode_comparison.md` for the full three-model comparison
+and investigation.
 
 ### Layer 2 — Answer Correctness (deterministic + optional LLM judge)
 
@@ -202,6 +205,7 @@ without changes to pipeline code.
 | Ollama | `snowflake-arctic-embed:335m` | 1024 |
 | Ollama | `granite-embedding:278m` | 768 |
 | Ollama | `bge-m3` | 1024 |
+| sentence_transformers (local HuggingFace) | `Octen-Embedding-0.6B` | 1024 |
 | OpenAI | `text-embedding-3-*` | configurable |
 | Voyage | `voyage-*` | configurable |
 

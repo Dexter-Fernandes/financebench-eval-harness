@@ -1,0 +1,16 @@
+embedding:
+  provider: sentence_transformers
+  model_name: Octen/Octen-Embedding-0.6B
+  batch_size: 24
+  normalize: true
+
+  # Hybrid retrieval (RRF) fusion weights, calibrated on the 46-question
+  # FinanceBench sample (see docs/status.md). Octen-0.6B's dense signal alone
+  # is the strongest of the three embedding models tested (doc_hit@1=0.696,
+  # beating even granite-embedding:278m) — no dense:lexical ratio tested
+  # (1:1 through 10:1) fully recovers dense-alone performance; 10:1 is the
+  # best of what was tried, but this is a genuinely different outcome from
+  # granite (where 3:1 matched/exceeded dense-alone). Treat dense-alone as
+  # the stronger choice for this model on this corpus.
+  fusion_dense_weight: 10.0
+  fusion_lexical_weight: 1.0
