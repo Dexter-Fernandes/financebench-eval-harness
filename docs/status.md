@@ -356,25 +356,78 @@ pypdf-extracted already (so a cleaner extractor could reduce, not improve,
 token overlap with gold); that risk is unchanged by this finding and would
 still need its own verification spike before implementing.
 
+## Proper table extraction (pdfplumber/camelot) — investigated, shelved
+
+Ran the verification spike the note above called for, before implementing
+anything. Installed both `pdfplumber` and `camelot-py[base]` (clean
+installs; Ghostscript already present at `/usr/bin/gs` for camelot).
+Extracted tables from the same 6 evidence pages used for the option-3
+spike (spanning all 3 observed pypdf layout styles), chunked the extracted
+text at production `chunk_size=800`/`chunk_overlap=150`, and scored the
+best resulting chunk against gold evidence the same way the real pipeline
+would.
+
+**Result: pypdf's current raw extraction beat or tied both libraries on
+every page tested.** pdfplumber's default (line/ruling-based) table
+detector found **zero tables** on Adobe p63, a page that's almost entirely
+a Consolidated Statement of Cash Flows — these financial statements have
+no visible ruling lines, which the default strategy needs. Switching to
+`vertical_strategy="text"`/`horizontal_strategy="text"` fixed detection
+(found a table on every page) but scored *worse* than pypdf on 5 of 6
+pages anyway. camelot's `lattice` flavor found zero tables on 3 of 6 pages
+for the same ruling-line reason; `stream` flavor (its whitespace-based
+mode) never won outright either. This confirms the risk flagged when this
+option was first ranked: FinanceBench's own gold `evidence_text` appears
+to have been extracted with something close to pypdf's simple linear-text
+method, so a structurally cleaner table renderer changes cell spacing and
+drops surrounding page context in ways that *reduce* raw token overlap
+with the gold annotations rather than improving it. Decided not to
+implement. No `documents.py`/ingestion changes made; no commit for this
+item beyond this writeup.
+
+**Follow-up — what SOTA actually does here:** discussed production
+approaches to this exact problem. Two came out as worth spiking next
+session (both queued in Next Steps below):
+1. **ML-based layout/table detection** (`unstructured.io` / Microsoft's
+   Table Transformer) instead of rule-based heuristics — the biggest lift
+   of anything discussed this session: new heavy dependency, `DocumentPage`
+   /chunk schema changes, full corpus re-extraction with per-page ML
+   inference, and `chunking.py` needs a genuinely new table-atomic-chunk
+   code path before any retrieval improvement could even be tested. Needs
+   its own verification spike first, same lesson as pdfplumber/camelot.
+2. **Small-to-big / contextual retrieval** — Tier A (expand each retrieved
+   hit to its adjacent chunks at query time, no LLM call, no re-indexing)
+   is testable against the **existing** nomic/granite/Octen indexes right
+   now — cheapest option discussed all session, roughly half a day. Tier B
+   (LLM-generated per-chunk context/summary via the existing Ollama
+   `LLMClient`, prepended before embedding) is medium-sized — bounded local
+   LLM compute over ~16,248 chunks, then re-embed/re-index whichever model
+   is tested.
+
 ## Next Steps
 
 1. Raise M9 PR and merge to main.
-2. **Queued:** `nvidia/Nemotron-3-Embed-1B-BF16` at `batch_size=6` as a fourth
+2. **Spike small-to-big / contextual retrieval, Tier A first** — cheapest
+   untried lever, no re-indexing needed, works against existing indexes.
+3. **Spike ML-based layout/table detection** (`unstructured.io`/Table
+   Transformer) if Tier A isn't enough — verify against this corpus's
+   layout quirks before committing to the full re-extraction pipeline.
+4. **Queued:** `nvidia/Nemotron-3-Embed-1B-BF16` at `batch_size=6` as a fourth
    embedding model — see "Local HuggingFace Embedding Models" above for the
    VRAM math. Not yet started.
-3. M10 (fine-tuned reranker): train a LoRA adapter for `bge-reranker-base` and
+5. M10 (fine-tuned reranker): train a LoRA adapter for `bge-reranker-base` and
    load it via `RerankerConfig.adapter_path` — the seam is already in place.
-4. M13 (Snowflake embedding comparison) can reuse the same hybrid/reranked
+6. M13 (Snowflake embedding comparison) can reuse the same hybrid/reranked
    retrieval modes against a different base embedding model — will need its
    own calibrated `fusion_dense_weight`/`fusion_lexical_weight`, following the
    same sweep process documented above (now proven across three models:
    nomic, granite, Octen).
-5. Consider whether `hybrid_reranked`'s mixed result (see "Follow-up
+7. Consider whether `hybrid_reranked`'s mixed result (see "Follow-up
    resolved" above) warrants its own weight calibration separate from plain
    `hybrid` — the ratio tuned for `hybrid` isn't obviously optimal once a
    reranker sits downstream of it; would need its own small sweep, for both
    granite and Octen.
-6. Known gap (tracked separately, not fixed in M9): `rag_predictions.jsonl`
+8. Known gap (tracked separately, not fixed in M9): `rag_predictions.jsonl`
    writes `context_chunk_ids` but `analyze_grounding` reads `retrieved_chunks`,
    so citation/context-sufficiency checks silently see empty context on real
    `run-rag` output. Needs a fix before grounding analysis numbers on real runs

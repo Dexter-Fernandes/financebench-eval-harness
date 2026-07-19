@@ -159,14 +159,48 @@ Not a tuning problem — a single line-based heuristic can't cover this much
 per-filing format variance. Decided not to implement. Full detail in
 `docs/status.md`. Not code — no commit for this item.
 
+## Proper table extraction (pdfplumber/camelot) — investigated, shelved
+
+Verified before implementing (same lesson as option 3): installed both
+libraries (clean installs, Ghostscript already present for camelot),
+extracted tables from the same 6 evidence pages across all 3 layout styles,
+chunked the extracted text at production `chunk_size=800`/`overlap=150`,
+and scored against gold evidence. Result: **pypdf (current) beat or tied
+both libraries on every page tested.** pdfplumber's default table detector
+found *zero* tables on a page that's almost entirely a financial statement
+(Adobe p63); switching to its text-based strategy fixed detection but
+scored worse everywhere else. camelot's `lattice` flavor found zero tables
+on 3/6 pages (no ruling lines on these statements); `stream` never won
+outright either. Confirms the risk flagged when option 4 was first ranked:
+FinanceBench's own gold `evidence_text` looks pypdf-shaped already, so a
+structurally-cleaner extractor reduces raw token overlap with it rather
+than improving it. Decided not to implement. Not code — no commit.
+
+**Follow-up SOTA discussion:** asked what production RAG systems actually
+do here — landed on two live options for next session, both added to
+`docs/status.md`'s Next Steps and the in-session task list:
+1. **ML-based layout detection** (`unstructured.io`/Table Transformer) —
+   biggest lift discussed all session: new heavy dependency, `DocumentPage`
+   /chunk schema changes, full re-extraction + re-chunk (chunking.py needs
+   a table-atomic-chunk path to even test whether it helps), re-index to
+   test. Needs its own verification spike first, same as pdfplumber/camelot.
+2. **Small-to-big / contextual retrieval** — Tier A (neighbor-chunk
+   expansion at retrieval time, no LLM, no re-indexing, testable against
+   the *existing* indexes right now) is the cheapest option discussed all
+   session (~half a day). Tier B (LLM-generated chunk context/summaries via
+   the existing Ollama LLMClient before embedding) is medium-sized, needs
+   re-embedding whichever model is tested.
+
 ## Next step
 
 1. **Raise and merge M9 PR** — branch is clean, all tests pass.
 2. **Run `nvidia/Nemotron-3-Embed-1B-BF16` at `batch_size=6`** — queued, not started. Full extrapolated VRAM math in `docs/status.md`.
-3. **Consider a separate weight sweep for `hybrid_reranked`** — 3:1 (granite) and 10:1 (Octen), both tuned for plain `hybrid`, give `hybrid_reranked` mixed results (small `doc_mrr@10` wins, `doc_hit@5`/`@10` regressions) for both models tested so far; may need its own calibrated ratio rather than inheriting `hybrid`'s.
-4. **M10 (fine-tuned reranker)** — the seam is ready: train a LoRA adapter for `bge-reranker-base`, load it via `RerankerConfig.adapter_path` / `LocalRerankerClient`, compare against the pretrained baseline recorded here. GPU support means iteration on this will be much faster than the original CPU-only path.
-5. **M13 (Snowflake embedding comparison)** — can reuse the same hybrid/reranked retrieval modes, but will need its own calibrated `fusion_dense_weight`/`fusion_lexical_weight` via the same sweep process, now proven across three very different models (Ollama-served and local HuggingFace).
-6. **Fix the grounding-analysis context gap** (spawned as a separate task, not fixed in M9): `run_rag_from_config` writes `context_chunk_ids` (list of IDs) into `rag_predictions.jsonl`, but `analyze_grounding` reads `retrieved_chunks` (list of {chunk_id, text} dicts) — the key names don't match, so citation/context-sufficiency checks silently see empty context on every real `run-rag` → `analyze-grounding` run. Existing tests never caught this because they hand-build `rag_predictions.jsonl` fixtures with `retrieved_chunks` already present.
+3. **Spike small-to-big / contextual retrieval Tier A first** — cheapest untried option, no re-indexing needed, try before ML layout detection.
+4. **Spike ML-based layout/table detection** (`unstructured.io`/Table Transformer) if Tier A doesn't move the needle enough — verify against this corpus's layout quirks before committing to the full re-extraction pipeline.
+5. **Consider a separate weight sweep for `hybrid_reranked`** — 3:1 (granite) and 10:1 (Octen), both tuned for plain `hybrid`, give `hybrid_reranked` mixed results (small `doc_mrr@10` wins, `doc_hit@5`/`@10` regressions) for both models tested so far; may need its own calibrated ratio rather than inheriting `hybrid`'s.
+6. **M10 (fine-tuned reranker)** — the seam is ready: train a LoRA adapter for `bge-reranker-base`, load it via `RerankerConfig.adapter_path` / `LocalRerankerClient`, compare against the pretrained baseline recorded here. GPU support means iteration on this will be much faster than the original CPU-only path.
+7. **M13 (Snowflake embedding comparison)** — can reuse the same hybrid/reranked retrieval modes, but will need its own calibrated `fusion_dense_weight`/`fusion_lexical_weight` via the same sweep process, now proven across three very different models (Ollama-served and local HuggingFace).
+8. **Fix the grounding-analysis context gap** (spawned as a separate task, not fixed in M9): `run_rag_from_config` writes `context_chunk_ids` (list of IDs) into `rag_predictions.jsonl`, but `analyze_grounding` reads `retrieved_chunks` (list of {chunk_id, text} dicts) — the key names don't match, so citation/context-sufficiency checks silently see empty context on every real `run-rag` → `analyze-grounding` run. Existing tests never caught this because they hand-build `rag_predictions.jsonl` fixtures with `retrieved_chunks` already present.
 
 ## Known risks or blockers
 
