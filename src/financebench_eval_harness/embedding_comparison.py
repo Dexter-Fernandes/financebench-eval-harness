@@ -7,7 +7,6 @@ leaderboard and report generation.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import time
@@ -35,6 +34,7 @@ from financebench_eval_harness.eval_retrieval import score_retrieval_run
 from financebench_eval_harness.index_builder import (
     IndexBuildError,
     IndexMetadata,
+    _corpus_hash,
     build_index,
     load_index,
 )
@@ -186,13 +186,6 @@ def _load_questions(questions_path: Path) -> list[Question]:
                 query=d["question"],
             ))
     return questions
-
-
-def _corpus_hash(chunks: list[Chunk]) -> str:
-    """Stable SHA-256 of the corpus, order-independent."""
-    entries = sorted(f"{c.chunk_id}\t{c.text}" for c in chunks)
-    content = "\n".join(entries).encode("utf-8")
-    return hashlib.sha256(content).hexdigest()
 
 
 # ---------------------------------------------------------------------------

@@ -38,6 +38,7 @@ from financebench_eval_harness.config import (
     DatasetConfigError,
     load_dataset_config,
 )
+from financebench_eval_harness.data_common import read_jsonl
 from financebench_eval_harness.data import (
     DocumentExtractionError,
     DocumentPageLoadError,
@@ -951,7 +952,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"Pages file not found: {pipeline_cfg.pages_path}", file=sys.stderr)
             return 1
 
-        raw_pages = _read_jsonl_file(pipeline_cfg.pages_path)
+        raw_pages = read_jsonl(pipeline_cfg.pages_path)
         pages = [
             RetrievalDocumentPage(
                 doc_id=row["doc_name"].removesuffix(".pdf"),
@@ -988,7 +989,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"Chunks file not found: {pipeline_cfg.chunks_path}", file=sys.stderr)
                 return 1
 
-            raw_chunks = _read_jsonl_file(pipeline_cfg.chunks_path)
+            raw_chunks = read_jsonl(pipeline_cfg.chunks_path)
             chunks = [Chunk(**row) for row in raw_chunks]
 
             if not chunks:
@@ -1034,7 +1035,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"Pages file not found: {args.pages}", file=sys.stderr)
             return 1
 
-        raw_pages = _read_jsonl_file(args.pages)
+        raw_pages = read_jsonl(args.pages)
         pages = [
             RetrievalDocumentPage(
                 doc_id=row["doc_name"].removesuffix(".pdf"),
@@ -1118,7 +1119,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"Questions file not found: {pipeline_cfg.questions_path}", file=sys.stderr)
                 return 1
 
-            raw = _read_jsonl_file(pipeline_cfg.questions_path)
+            raw = read_jsonl(pipeline_cfg.questions_path)
             questions = [
                 Question(
                     question_id=row["question_id"],
@@ -1169,7 +1170,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(str(exc), file=sys.stderr)
             return 1
 
-        raw = _read_jsonl_file(args.questions)
+        raw = read_jsonl(args.questions)
         questions = [
             Question(
                 question_id=row["question_id"],
@@ -1340,8 +1341,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"Answer scores file not found: {args.answer_scores}", file=sys.stderr)
             return 1
 
-        retrieval_scores = _read_jsonl_file(args.retrieval_scores)
-        answer_scores = _read_jsonl_file(args.answer_scores)
+        retrieval_scores = read_jsonl(args.retrieval_scores)
+        answer_scores = read_jsonl(args.answer_scores)
         rows = join_retrieval_and_answer_scores(retrieval_scores, answer_scores, k=args.k)
         summary = summarize_joined_metrics(rows)
 
@@ -1822,38 +1823,36 @@ def _run_configured_rag_evaluation(
     )
 
 
+def _build_llm(model, mock_responses: list[str], kind: str = "LLM") -> LLMClient:
+    if model.provider == "mock":
+        return MockLLMClient(model, responses=mock_responses)
+    if model.provider == "ollama":
+        return OllamaLLMClient(model)
+    raise LLMConfigError(f"Unsupported {kind} provider: {model.provider}")
+
+
 def _build_rag_llm_client(config, *, limit: int) -> LLMClient:
-    if config.model.provider == "mock":
-        return MockLLMClient(config.model, responses=["mock response"] * limit)
-    if config.model.provider == "ollama":
-        return OllamaLLMClient(config.model)
-    raise LLMConfigError(f"Unsupported LLM provider: {config.model.provider}")
+    return _build_llm(config.model, ["mock response"] * limit)
 
 
 def _build_score_judge_client(judge_config) -> LLMClient | None:
     if judge_config is None:
         return None
-    if judge_config.model.provider == "mock":
-        return MockLLMClient(
-            judge_config.model,
-            responses=['{"verdict": "correct", "reason": "Mock."}'] * 1000,
-        )
-    if judge_config.model.provider == "ollama":
-        return OllamaLLMClient(judge_config.model)
-    raise LLMConfigError(f"Unsupported judge LLM provider: {judge_config.model.provider}")
+    return _build_llm(
+        judge_config.model,
+        ['{"verdict": "correct", "reason": "Mock."}'] * 1000,
+        "judge LLM",
+    )
 
 
 def _build_rag_judge_client(config, *, limit: int) -> LLMClient | None:
     if config.judge is None:
         return None
-    if config.judge.model.provider == "mock":
-        return MockLLMClient(
-            config.judge.model,
-            responses=['{"verdict": "incorrect", "reason": "Mock judge response."}'] * limit,
-        )
-    if config.judge.model.provider == "ollama":
-        return OllamaLLMClient(config.judge.model)
-    raise LLMConfigError(f"Unsupported judge LLM provider: {config.judge.model.provider}")
+    return _build_llm(
+        config.judge.model,
+        ['{"verdict": "incorrect", "reason": "Mock judge response."}'] * limit,
+        "judge LLM",
+    )
 
 
 def _record_report_path(run_metadata_path: Path, report_path: Path) -> None:
@@ -1870,31 +1869,17 @@ def _record_report_path(run_metadata_path: Path, report_path: Path) -> None:
 
 
 def _build_llm_client(run_config) -> LLMClient:
-    if run_config.model.provider == "mock":
-        return MockLLMClient(
-            run_config.model,
-            responses=["mock response"] * run_config.settings.limit,
-        )
-    if run_config.model.provider == "ollama":
-        return OllamaLLMClient(run_config.model)
-    raise LLMConfigError(f"Unsupported LLM provider: {run_config.model.provider}")
+    return _build_llm(run_config.model, ["mock response"] * run_config.settings.limit)
 
 
 def _build_judge_client(run_config) -> LLMClient | None:
     if run_config.judge is None:
         return None
-    if run_config.judge.model.provider == "mock":
-        return MockLLMClient(
-            run_config.judge.model,
-            responses=[
-                '{"verdict": "incorrect", "reason": "Mock judge response."}'
-            ]
-            * run_config.settings.limit,
-        )
-    if run_config.judge.model.provider == "ollama":
-        return OllamaLLMClient(run_config.judge.model)
-    raise LLMConfigError(
-        f"Unsupported judge LLM provider: {run_config.judge.model.provider}"
+    return _build_llm(
+        run_config.judge.model,
+        ['{"verdict": "incorrect", "reason": "Mock judge response."}']
+        * run_config.settings.limit,
+        "judge LLM",
     )
 
 
@@ -2124,11 +2109,6 @@ def _build_retriever(
         hybrid, reranker_client, candidate_k=candidate_k, top_n=reranker_config.top_n,
     )
     return reranked, fusion_meta, reranker_meta
-
-
-def _read_jsonl_file(path: Path) -> list[dict]:
-    lines = path.read_text(encoding="utf-8").splitlines()
-    return [json.loads(line) for line in lines if line.strip()]
 
 
 def _positive_int(value: str) -> int:

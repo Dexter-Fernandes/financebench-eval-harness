@@ -7,9 +7,10 @@ without re-parsing the file on every question.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
+
+from financebench_eval_harness.data_common import read_jsonl
 
 __all__ = ["GoldLookupError", "build_gold_lookup"]
 
@@ -30,7 +31,7 @@ def build_gold_lookup(examples_path: str | Path) -> GoldLookup:
     fields in evidence[0], or duplicate question_id values.
     """
     path = Path(examples_path)
-    rows = _read_jsonl_rows(path)
+    rows = read_jsonl(path)
     lookup: GoldLookup = {}
     for row in rows:
         qid = row["question_id"]
@@ -40,14 +41,6 @@ def build_gold_lookup(examples_path: str | Path) -> GoldLookup:
             )
         lookup[qid] = _extract_evidence_entry(row, qid)
     return lookup
-
-
-def _read_jsonl_rows(path: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            rows.append(json.loads(line))
-    return rows
 
 
 def _extract_evidence_entry(record: dict[str, Any], question_id: str) -> dict[str, Any]:

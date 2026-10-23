@@ -6,21 +6,18 @@ from typing import Any
 
 import yaml
 
+from financebench_eval_harness.config_fields import (
+    REQUIRED_JUDGE_KEYS,
+    REQUIRED_JUDGE_PROMPT_KEYS,
+    REQUIRED_MODEL_KEYS,
+    FieldReader,
+)
 from financebench_eval_harness.evaluation import EvaluationMode
 from financebench_eval_harness.llm import LLMGenerationConfig
 
 
 DEFAULT_EVALUATION_RUN_CONFIG_PATH = Path("configs/evaluation/local_mock.yaml")
 REQUIRED_EVAL_KEYS = {"dataset_path", "output_dir", "mode", "limit"}
-REQUIRED_MODEL_KEYS = {
-    "provider",
-    "model_name",
-    "temperature",
-    "max_tokens",
-    "timeout_seconds",
-}
-REQUIRED_JUDGE_KEYS = REQUIRED_MODEL_KEYS | {"enabled", "prompt"}
-REQUIRED_JUDGE_PROMPT_KEYS = {"id", "version", "template_path"}
 
 
 @dataclass(frozen=True)
@@ -128,16 +125,16 @@ def load_evaluation_run_config(
             f"Evaluation run config must contain a 'model' mapping: {path}"
         )
 
-    _validate_required_eval_keys(eval_config)
-    _validate_required_model_keys(model_config)
+    _reader.require_keys(eval_config, REQUIRED_EVAL_KEYS, "eval")
+    _reader.require_keys(model_config, REQUIRED_MODEL_KEYS, "model")
 
-    judge_config = _judge_config_from_mapping(raw_config.get("judge"))
+    judge_config = parse_judge_config(_reader, raw_config.get("judge"))
 
     return EvaluationRunConfig(
         settings=EvaluationRunSettings(
             dataset_path=_path_from_mapping(eval_config, "dataset_path"),
             output_dir=_path_from_mapping(eval_config, "output_dir"),
-            mode=_mode_from_mapping(eval_config),
+            mode=_reader.mode(eval_config),
             limit=_positive_int_from_mapping(eval_config, "limit"),
         ),
         model=LLMGenerationConfig(
@@ -155,133 +152,53 @@ def load_evaluation_run_config(
     )
 
 
-def _validate_required_eval_keys(eval_config: dict[str, Any]) -> None:
-    missing_keys = sorted(REQUIRED_EVAL_KEYS - eval_config.keys())
-    if missing_keys:
-        missing = ", ".join(missing_keys)
-        raise EvaluationRunConfigError(
-            f"Evaluation run config missing required eval key(s): {missing}"
-        )
-
-
-def _validate_required_model_keys(model_config: dict[str, Any]) -> None:
-    missing_keys = sorted(REQUIRED_MODEL_KEYS - model_config.keys())
-    if missing_keys:
-        missing = ", ".join(missing_keys)
-        raise EvaluationRunConfigError(
-            f"Evaluation run config missing required model key(s): {missing}"
-        )
-
-
-def _judge_config_from_mapping(raw_judge_config: Any) -> JudgeConfig | None:
-    if raw_judge_config is None:
+def parse_judge_config(
+    reader: FieldReader, raw_judge: Any, section: str = "judge"
+) -> JudgeConfig | None:
+    """Parse an optional judge block; shared by the run, RAG run and RAG score configs."""
+    if raw_judge is None:
         return None
-    if not isinstance(raw_judge_config, dict):
-        raise EvaluationRunConfigError(
-            "Evaluation run config key 'judge' must be a mapping"
-        )
+    if not isinstance(raw_judge, dict):
+        raise reader.fail(f"key '{section}' must be a mapping")
 
-    enabled = raw_judge_config.get("enabled")
-    if type(enabled) is not bool:
-        raise EvaluationRunConfigError(
-            "Evaluation run config key 'judge.enabled' must be a boolean"
-        )
-    if not enabled:
+    if type(raw_judge.get("enabled")) is not bool:
+        raise reader.fail(f"key '{section}.enabled' must be a boolean")
+    if not raw_judge["enabled"]:
         return None
 
-    missing_keys = sorted(REQUIRED_JUDGE_KEYS - raw_judge_config.keys())
-    if missing_keys:
-        missing = ", ".join(missing_keys)
-        raise EvaluationRunConfigError(
-            f"Evaluation run config missing required judge key(s): {missing}"
-        )
+    reader.require_keys(raw_judge, REQUIRED_JUDGE_KEYS, section)
 
-    prompt_config = raw_judge_config["prompt"]
-    if not isinstance(prompt_config, dict):
-        raise EvaluationRunConfigError(
-            "Evaluation run config key 'judge.prompt' must be a mapping"
-        )
-
-    missing_prompt_keys = sorted(REQUIRED_JUDGE_PROMPT_KEYS - prompt_config.keys())
-    if missing_prompt_keys:
-        missing = ", ".join(missing_prompt_keys)
-        raise EvaluationRunConfigError(
-            f"Evaluation run config missing required judge prompt key(s): {missing}"
-        )
+    prompt_raw = raw_judge["prompt"]
+    prompt_section = f"{section}.prompt"
+    if not isinstance(prompt_raw, dict):
+        raise reader.fail(f"key '{prompt_section}' must be a mapping")
+    reader.require_keys(prompt_raw, REQUIRED_JUDGE_PROMPT_KEYS, prompt_section)
 
     return JudgeConfig(
         enabled=True,
         model=LLMGenerationConfig(
-            provider=_string_from_mapping(raw_judge_config, "provider"),
-            model_name=_string_from_mapping(raw_judge_config, "model_name"),
-            temperature=_float_from_mapping(raw_judge_config, "temperature"),
-            max_tokens=_positive_int_from_mapping(raw_judge_config, "max_tokens"),
-            timeout_seconds=_positive_float_from_mapping(
-                raw_judge_config,
-                "timeout_seconds",
-            ),
-            base_url=_optional_string_from_mapping(raw_judge_config, "base_url"),
+            provider=reader.string(raw_judge, "provider", section),
+            model_name=reader.string(raw_judge, "model_name", section),
+            temperature=reader.float(raw_judge, "temperature", section),
+            max_tokens=reader.positive_int(raw_judge, "max_tokens", section),
+            timeout_seconds=reader.positive_float(raw_judge, "timeout_seconds", section),
+            base_url=reader.optional_string(raw_judge, "base_url"),
         ),
         prompt=JudgePromptConfig(
-            id=_string_from_mapping(prompt_config, "id"),
-            version=_string_from_mapping(prompt_config, "version"),
-            template_path=_path_from_mapping(prompt_config, "template_path"),
+            id=reader.string(prompt_raw, "id", prompt_section),
+            version=reader.string(prompt_raw, "version", prompt_section),
+            template_path=reader.path(prompt_raw, "template_path"),
         ),
     )
 
 
-def _mode_from_mapping(config: dict[str, Any]) -> EvaluationMode:
-    value = _string_from_mapping(config, "mode")
-    try:
-        return EvaluationMode(value)
-    except ValueError as exc:
-        raise EvaluationRunConfigError(f"Unknown evaluation mode: {value}") from exc
-
-
-def _path_from_mapping(config: dict[str, Any], key: str) -> Path:
-    return Path(_string_from_mapping(config, key))
-
-
-def _string_from_mapping(config: dict[str, Any], key: str) -> str:
-    value = config[key]
-    if not isinstance(value, str) or not value.strip():
-        raise EvaluationRunConfigError(
-            f"Evaluation run config key '{key}' must be a non-empty string"
-        )
-    return value
-
-
-def _float_from_mapping(config: dict[str, Any], key: str) -> float:
-    value = config[key]
-    if type(value) not in (float, int):
-        raise EvaluationRunConfigError(
-            f"Evaluation run config key '{key}' must be a number"
-        )
-    return float(value)
-
-
-def _optional_string_from_mapping(config: dict[str, Any], key: str) -> str | None:
-    if key not in config or config[key] is None:
-        return None
-    return _string_from_mapping(config, key)
-
-
-def _positive_float_from_mapping(config: dict[str, Any], key: str) -> float:
-    value = _float_from_mapping(config, key)
-    if value <= 0:
-        raise EvaluationRunConfigError(
-            f"Evaluation run config key '{key}' must be greater than 0"
-        )
-    return value
-
-
-def _positive_int_from_mapping(config: dict[str, Any], key: str) -> int:
-    value = config[key]
-    if type(value) is not int or value <= 0:
-        raise EvaluationRunConfigError(
-            f"Evaluation run config key '{key}' must be a positive integer"
-        )
-    return value
+_reader = FieldReader(EvaluationRunConfigError, "Evaluation run config")
+_path_from_mapping = _reader.path
+_string_from_mapping = _reader.string
+_float_from_mapping = _reader.float
+_positive_float_from_mapping = _reader.positive_float
+_positive_int_from_mapping = _reader.positive_int
+_optional_string_from_mapping = _reader.optional_string
 
 
 __all__ = [

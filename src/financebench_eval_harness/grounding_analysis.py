@@ -16,6 +16,7 @@ from typing import Any
 from financebench_eval_harness.analysis import classify_root_cause
 from financebench_eval_harness.citation_checker import score_citations
 from financebench_eval_harness.context_sufficiency import check_context_sufficiency
+from financebench_eval_harness.data_common import read_jsonl_lenient
 from financebench_eval_harness.grounding_analysis_config import GroundingAnalysisConfig
 from financebench_eval_harness.grounding_types import (
     ROOT_CAUSE_LABELS,
@@ -48,7 +49,7 @@ def analyze_grounding(
     output_dir.mkdir(parents=True, exist_ok=True)
     k = config.settings.k
 
-    predictions = _load_jsonl(run_dir / "rag_predictions.jsonl")
+    predictions = read_jsonl_lenient(run_dir / "rag_predictions.jsonl")
     grounding_scores_raw = _load_jsonl_by_qid(run_dir / "rag_grounding_scores.jsonl")
     answer_scores_raw = _load_jsonl_by_qid(run_dir / "rag_answer_scores.jsonl")
 
@@ -258,24 +259,10 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return summary
 
 
-def _load_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.is_file():
-        return []
-    rows: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line:
-            try:
-                rows.append(json.loads(line))
-            except json.JSONDecodeError:
-                pass
-    return rows
-
-
 def _load_jsonl_by_qid(path: Path) -> dict[str, dict[str, Any]]:
     return {
         str(row.get("question_id", "")): row
-        for row in _load_jsonl(path)
+        for row in read_jsonl_lenient(path)
         if "question_id" in row
     }
 

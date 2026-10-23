@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from pathlib import Path
-from typing import Protocol
 
 import faiss
 import numpy as np
@@ -12,18 +12,6 @@ from financebench_eval_harness.retrieval_types import Chunk, RetrievalResult
 
 _INDEX_FILE = "index.faiss"
 _CHUNKS_FILE = "chunk_metadata.jsonl"
-
-
-class VectorStore(Protocol):
-    """Common interface for vector index backends."""
-
-    def add(self, chunks: list[Chunk], embeddings: list[list[float]]) -> None:
-        """Index chunks with their corresponding embedding vectors."""
-
-    def search(
-        self, query_embedding: list[float], top_k: int
-    ) -> list[RetrievalResult]:
-        """Return the top-k nearest chunks for a query embedding."""
 
 
 class VectorStoreError(RuntimeError):
@@ -104,21 +92,7 @@ class FaissVectorStore:
         faiss.write_index(self._index, str(path / _INDEX_FILE))
         with (path / _CHUNKS_FILE).open("w", encoding="utf-8") as f:
             for chunk in self._chunks:
-                f.write(
-                    json.dumps(
-                        {
-                            "chunk_id": chunk.chunk_id,
-                            "doc_id": chunk.doc_id,
-                            "doc_name": chunk.doc_name,
-                            "page_num": chunk.page_num,
-                            "text": chunk.text,
-                            "start_char": chunk.start_char,
-                            "end_char": chunk.end_char,
-                        },
-                        ensure_ascii=False,
-                    )
-                    + "\n"
-                )
+                f.write(json.dumps(asdict(chunk), ensure_ascii=False) + "\n")
 
     @classmethod
     def load(cls, path: Path) -> "FaissVectorStore":
@@ -134,18 +108,7 @@ class FaissVectorStore:
                 line = line.strip()
                 if not line:
                     continue
-                d = json.loads(line)
-                chunks.append(
-                    Chunk(
-                        chunk_id=d["chunk_id"],
-                        doc_id=d["doc_id"],
-                        doc_name=d["doc_name"],
-                        page_num=d["page_num"],
-                        text=d["text"],
-                        start_char=d["start_char"],
-                        end_char=d["end_char"],
-                    )
-                )
+                chunks.append(Chunk(**json.loads(line)))
         store = cls.__new__(cls)
         store._dim = index.d
         store._index = index

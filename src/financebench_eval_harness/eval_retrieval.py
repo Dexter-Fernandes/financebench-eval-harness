@@ -17,6 +17,7 @@ from pathlib import Path
 
 import yaml
 
+from financebench_eval_harness.data_common import read_jsonl
 from financebench_eval_harness.pipeline_config import PipelineConfig
 from financebench_eval_harness.retrieval_scoring import (
     score_evidence_coverage_hit,
@@ -128,7 +129,7 @@ def generate_retrieval_report(
     report_path = output_dir / f"retrieval_eval_{run_id}.md"
     if run_dir is not None:
         leaderboard = json.loads((Path(run_dir) / "retrieval_leaderboard.json").read_text(encoding="utf-8"))
-        per_question = _load_scores_jsonl(Path(run_dir) / "retrieval_scores.jsonl")
+        per_question = read_jsonl(Path(run_dir) / "retrieval_scores.jsonl")
         gold_examples = _load_gold_examples(config.questions_path)
         content = _render_rich_retrieval_report(leaderboard, per_question, gold_examples, run_id)
     else:
@@ -226,26 +227,6 @@ def _build_leaderboard_summary(
         "chunk_overlap": config.chunking.chunk_overlap,
         "failure_label_counts": _count_failure_labels(per_question),
     }
-
-
-def _load_scores_jsonl(path: Path) -> list[dict]:
-    rows = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            rows.append(json.loads(line))
-    return rows
-
-
-def _classify_failures(per_question: list[dict], k: int) -> dict[str, int]:
-    doc_miss = page_miss = text_miss = 0
-    for row in per_question:
-        if not row.get(f"doc_hit@{k}"):
-            doc_miss += 1
-        elif not row.get(f"page_hit@{k}"):
-            page_miss += 1
-        elif not row.get(f"evidence_text_hit@{k}"):
-            text_miss += 1
-    return {"doc_miss": doc_miss, "page_miss": page_miss, "text_miss": text_miss}
 
 
 def _render_rich_retrieval_report(
@@ -370,7 +351,7 @@ def format_retrieval_failure_report(
     """
     run_dir = Path(run_dir)
     results = _load_retrieval_results(run_dir / "retrieval_results.jsonl")
-    scores = {r["question_id"]: r for r in _load_scores_jsonl(run_dir / "retrieval_scores.jsonl")}
+    scores = {r["question_id"]: r for r in read_jsonl(run_dir / "retrieval_scores.jsonl")}
     gold_examples = _load_gold_examples(config.questions_path)
 
     if question_id not in scores:

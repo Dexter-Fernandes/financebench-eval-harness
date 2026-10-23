@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -19,6 +18,7 @@ from financebench_eval_harness.judge import (
 from financebench_eval_harness.llm import LLMClient, LLMProviderError
 from financebench_eval_harness.rag_run_config import RAGRunConfig
 from financebench_eval_harness.rag_types import format_retrieved_context, load_rag_inputs
+from financebench_eval_harness.run import _judge_metadata, _timestamp_run_id
 from financebench_eval_harness.scoring import score_prediction, summarize_scores
 
 
@@ -289,27 +289,6 @@ def _score_with_judge(
         "prompt_version": config.judge.prompt.version,
         "latency_ms": latency_ms,
     }
-
-
-def _judge_metadata(config: RAGRunConfig) -> dict[str, object]:
-    if config.judge is None:
-        return {"enabled": False}
-    return {
-        "enabled": True,
-        "provider": config.judge.model.provider,
-        "model_name": config.judge.model.model_name,
-        "temperature": config.judge.model.temperature,
-        "max_tokens": config.judge.model.max_tokens,
-        "timeout_seconds": config.judge.model.timeout_seconds,
-        "base_url": config.judge.model.base_url,
-        "prompt_id": config.judge.prompt.id,
-        "prompt_version": config.judge.prompt.version,
-        "prompt_template_path": str(config.judge.prompt.template_path),
-    }
-
-
-def _timestamp_run_id() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
 __all__ = [

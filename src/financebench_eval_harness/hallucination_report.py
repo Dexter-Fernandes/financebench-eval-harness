@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from financebench_eval_harness.data_common import read_jsonl_lenient
 from financebench_eval_harness.grounding_types import (
     GROUNDING_LABELS,
     HALLUCINATION_FAILURE_TYPES,
@@ -30,7 +31,7 @@ def generate_hallucination_report(
     output_dir: Path = Path("reports"),
 ) -> HallucinationReportResult:
     """Produce reports/hallucination_analysis_<run_id>.md."""
-    rows = _load_jsonl(failure_analysis_path)
+    rows = read_jsonl_lenient(failure_analysis_path)
     summary = _load_json(failure_summary_path)
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -213,20 +214,6 @@ def _recommendations(dominant_cause: str, rc_counts: Counter, total: int) -> lis
         "- Review examples above to identify patterns.",
         "",
     ]
-
-
-def _load_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.is_file():
-        return []
-    rows = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line:
-            try:
-                rows.append(json.loads(line))
-            except json.JSONDecodeError:
-                pass
-    return rows
 
 
 def _load_json(path: Path) -> dict[str, Any]:

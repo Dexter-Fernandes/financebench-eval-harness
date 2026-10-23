@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import struct
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Protocol
-from urllib import request
-from urllib.error import HTTPError, URLError
 
 import yaml
+
+from financebench_eval_harness.llm import post_ollama_json
 
 logger = logging.getLogger(__name__)
 
@@ -154,49 +154,7 @@ class OllamaEmbeddingClient:
             return results
 
 
-def _ollama_http_transport(
-    request_url: str,
-    payload: dict[str, Any],
-    timeout_seconds: float,
-) -> dict[str, Any]:
-    body = json.dumps(payload).encode("utf-8")
-    http_request = request.Request(
-        request_url,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with request.urlopen(http_request, timeout=timeout_seconds) as resp:
-            response_body = resp.read().decode("utf-8")
-    except HTTPError as exc:
-        response_body = exc.read().decode("utf-8", errors="replace")
-        try:
-            decoded_error = json.loads(response_body)
-        except json.JSONDecodeError:
-            decoded_error = None
-        if isinstance(decoded_error, dict):
-            error = decoded_error.get("error")
-            if isinstance(error, str) and error.strip():
-                return decoded_error
-        raise EmbeddingProviderError(
-            f"Ollama HTTP error from {request_url}: {exc.code} {exc.reason}"
-        ) from exc
-    except URLError as exc:
-        base_url = request_url.removesuffix("/api/embed")
-        raise EmbeddingProviderError(
-            f"Could not reach Ollama server at {base_url}. "
-            "Start Ollama or update the configured base_url."
-        ) from exc
-
-    try:
-        decoded = json.loads(response_body)
-    except json.JSONDecodeError as exc:
-        raise EmbeddingProviderError("Ollama response was not valid JSON") from exc
-
-    if not isinstance(decoded, dict):
-        raise EmbeddingProviderError("Ollama response must be a JSON object")
-    return decoded
+_ollama_http_transport = partial(post_ollama_json, error_cls=EmbeddingProviderError)
 
 
 # ---------------------------------------------------------------------------

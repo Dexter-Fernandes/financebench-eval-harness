@@ -15,9 +15,9 @@ from financebench_eval_harness.retriever import (
     RetrievalRunMetadata,
     RetrievedChunk,
     next_run_dir,
-    retrieve_for_questions,
     run_retrieval,
 )
+from financebench_eval_harness.hybrid_retriever import DenseRetriever
 from financebench_eval_harness.vector_store import FaissVectorStore
 
 
@@ -57,6 +57,14 @@ def make_store() -> FaissVectorStore:
 
 def make_client() -> MockEmbeddingClient:
     return MockEmbeddingClient(EMBED_CFG, embedding_dim=DIM)
+
+
+def retrieve_for_questions(questions, store, client, *, top_k):
+    retriever = DenseRetriever(store, client)
+    return [
+        RetrievalRow(q.question_id, q.query, retriever.retrieve(q.query, top_k))
+        for q in questions
+    ]
 
 
 QUESTIONS = [

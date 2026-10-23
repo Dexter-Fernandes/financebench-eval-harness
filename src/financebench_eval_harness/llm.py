@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Protocol
 from urllib import request
@@ -179,11 +180,13 @@ def load_llm_config(
     )
 
 
-def _ollama_http_transport(
+def post_ollama_json(
     request_url: str,
-    payload: dict[str, object],
+    payload: dict[str, Any],
     timeout_seconds: float,
+    error_cls: type[Exception],
 ) -> dict[str, Any]:
+    """POST a JSON payload to an Ollama endpoint, raising error_cls on failure."""
     body = json.dumps(payload).encode("utf-8")
     http_request = request.Request(
         request_url,
@@ -204,12 +207,12 @@ def _ollama_http_transport(
             error = decoded_error.get("error")
             if isinstance(error, str) and error.strip():
                 return decoded_error
-        raise LLMProviderError(
+        raise error_cls(
             f"Ollama HTTP error from {request_url}: {exc.code} {exc.reason}"
         ) from exc
     except URLError as exc:
-        base_url = request_url.removesuffix("/api/generate")
-        raise LLMProviderError(
+        base_url = request_url.rsplit("/api/", 1)[0]
+        raise error_cls(
             f"Could not reach Ollama server at {base_url}. "
             "Start Ollama or update the configured base_url."
         ) from exc
@@ -217,11 +220,14 @@ def _ollama_http_transport(
     try:
         decoded_response = json.loads(response_body)
     except json.JSONDecodeError as exc:
-        raise LLMProviderError("Ollama response was not valid JSON") from exc
+        raise error_cls("Ollama response was not valid JSON") from exc
 
     if not isinstance(decoded_response, dict):
-        raise LLMProviderError("Ollama response must be a JSON object")
+        raise error_cls("Ollama response must be a JSON object")
     return decoded_response
+
+
+_ollama_http_transport = partial(post_ollama_json, error_cls=LLMProviderError)
 
 
 def _required_string(config: dict[str, Any], key: str) -> str:

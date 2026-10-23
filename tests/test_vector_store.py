@@ -7,7 +7,6 @@ import pytest
 from financebench_eval_harness.retrieval_types import Chunk, RetrievalResult
 from financebench_eval_harness.vector_store import (
     FaissVectorStore,
-    VectorStore,
     VectorStoreError,
 )
 
@@ -38,18 +37,6 @@ VECS = {
     "west":  [-1.0, 0.0, 0.0, 0.0],
 }
 DIM = 4
-
-
-# ---------------------------------------------------------------------------
-# VectorStore Protocol
-# ---------------------------------------------------------------------------
-
-
-class TestVectorStoreProtocol:
-    def test_faiss_satisfies_protocol(self) -> None:
-        store: VectorStore = FaissVectorStore(dim=DIM)
-        assert hasattr(store, "add")
-        assert hasattr(store, "search")
 
 
 # ---------------------------------------------------------------------------

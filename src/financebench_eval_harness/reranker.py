@@ -15,6 +15,7 @@ from urllib.error import HTTPError, URLError
 
 import yaml
 
+from financebench_eval_harness.retrieval_scoring import _jaccard
 from financebench_eval_harness.scoring import _normalize_text
 
 _VALID_PROVIDERS = frozenset({"mock", "local", "http"})
@@ -75,12 +76,6 @@ class MockRerankerClient:
             return list(self._injected_scores)
         query_tokens = set(_normalize_text(query).split())
         return [_jaccard(query_tokens, set(_normalize_text(p).split())) for p in passages]
-
-
-def _jaccard(a: set[str], b: set[str]) -> float:
-    if not a and not b:
-        return 0.0
-    return len(a & b) / len(a | b)
 
 
 # ---------------------------------------------------------------------------

@@ -5,10 +5,11 @@ from pathlib import Path
 
 from financebench_eval_harness.chunking import ChunkingConfig, chunk_pages
 from financebench_eval_harness.embedding import EmbeddingConfig, MockEmbeddingClient
+from financebench_eval_harness.hybrid_retriever import DenseRetriever
 from financebench_eval_harness.index_builder import IndexMetadata, build_index, load_index
 from financebench_eval_harness.retrieval_config import RetrievalConfig
 from financebench_eval_harness.retrieval_types import Chunk, DocumentPage
-from financebench_eval_harness.retriever import Question, retrieve_for_questions, run_retrieval
+from financebench_eval_harness.retriever import Question, run_retrieval
 
 
 # ---------------------------------------------------------------------------
@@ -88,19 +89,15 @@ class TestRetrievalPipeline:
         chunks = chunk_pages(PAGES, CHUNKING_CFG)
         client = make_client()
         store, _ = _build_and_load(chunks, client, tmp_path / "idx")
-        question = Question(question_id="q001", query=PAGES[0].text)
-        rows = retrieve_for_questions([question], store, client, top_k=2)
-        assert len(rows) == 1
-        assert len(rows[0].retrieved) == 2
+        retrieved = DenseRetriever(store, client).retrieve(PAGES[0].text, top_k=2)
+        assert len(retrieved) == 2
 
     def test_retrieved_chunks_include_doc_and_page_metadata(self, tmp_path: Path) -> None:
         chunks = chunk_pages(PAGES, CHUNKING_CFG)
         client = make_client()
         store, _ = _build_and_load(chunks, client, tmp_path / "idx")
         # query exactly matches first chunk text → guaranteed rank-1 hit
-        question = Question(question_id="q001", query=chunks[0].text)
-        rows = retrieve_for_questions([question], store, client, top_k=1)
-        top = rows[0].retrieved[0]
+        top = DenseRetriever(store, client).retrieve(chunks[0].text, top_k=1)[0]
         assert top.doc_name == chunks[0].doc_name
         assert top.page_num == chunks[0].page_num
         assert top.chunk_id == chunks[0].chunk_id

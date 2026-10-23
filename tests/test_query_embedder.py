@@ -6,7 +6,6 @@ from financebench_eval_harness.embedding import EmbeddingConfig, EmbeddingProvid
 from financebench_eval_harness.query_embedder import (
     QueryEmbeddingError,
     embed_question,
-    embed_questions,
 )
 
 
@@ -79,47 +78,3 @@ class TestEmbedQuestion:
         with pytest.raises(QueryEmbeddingError) as exc_info:
             embed_question("What was the revenue?", _FailingEmbeddingClient())
         assert exc_info.value.__cause__ is not None
-
-
-# ---------------------------------------------------------------------------
-# embed_questions
-# ---------------------------------------------------------------------------
-
-
-class TestEmbedQuestions:
-    def test_returns_list_of_vectors(self) -> None:
-        texts = ["Q1?", "Q2?", "Q3?"]
-        vecs = embed_questions(texts, make_client())
-        assert len(vecs) == 3
-
-    def test_each_vector_has_correct_dimension(self) -> None:
-        texts = ["Revenue question?", "Expense question?"]
-        vecs = embed_questions(texts, make_client())
-        assert all(len(v) == EMBED_DIM for v in vecs)
-
-    def test_order_is_preserved(self) -> None:
-        texts = ["Revenue?", "Net income?", "Cash flow?"]
-        batch_vecs = embed_questions(texts, make_client())
-        single_vecs = [embed_question(t, make_client()) for t in texts]
-        assert batch_vecs == single_vecs
-
-    def test_raises_on_empty_list(self) -> None:
-        with pytest.raises(QueryEmbeddingError, match="[Ee]mpty"):
-            embed_questions([], make_client())
-
-    def test_raises_if_any_text_is_empty(self) -> None:
-        with pytest.raises(QueryEmbeddingError, match="[Ee]mpty"):
-            embed_questions(["Valid question?", ""], make_client())
-
-    def test_raises_if_any_text_is_whitespace_only(self) -> None:
-        with pytest.raises(QueryEmbeddingError, match="[Ee]mpty"):
-            embed_questions(["Valid?", "   "], make_client())
-
-    def test_provider_error_wrapped_as_query_embedding_error(self) -> None:
-        with pytest.raises(QueryEmbeddingError):
-            embed_questions(["Q1?", "Q2?"], _FailingEmbeddingClient())
-
-    def test_single_question_list_works(self) -> None:
-        vecs = embed_questions(["What was the EPS?"], make_client())
-        assert len(vecs) == 1
-        assert len(vecs[0]) == EMBED_DIM

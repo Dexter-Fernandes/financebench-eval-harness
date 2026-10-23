@@ -192,7 +192,7 @@ but answered correctly (parametric knowledge), and evidence missed and answer wr
 
 ## Provider Abstraction
 
-All three provider-facing types (`LLMClient`, `EmbeddingClient`, `VectorStore`)
+All three provider-facing types (`LLMClient`, `EmbeddingClient`, `RerankerClient`)
 are defined as Python `Protocol` classes. Any conforming implementation drops in
 without changes to pipeline code.
 
@@ -299,7 +299,7 @@ chunked input data.
   units and scales, fiscal year period detection, ±1 page offset tolerance for
   dataset annotation drift
 - **Python Protocol-based provider abstraction** — three Protocol interfaces
-  (`LLMClient`, `EmbeddingClient`, `VectorStore`) enable provider swaps without
+  (`LLMClient`, `EmbeddingClient`, `RerankerClient`) enable provider swaps without
   touching pipeline code
 - **Reproducibility engineering** — full YAML config snapshot per run, corpus
   hash validates index provenance, re-scoring without re-generation is a

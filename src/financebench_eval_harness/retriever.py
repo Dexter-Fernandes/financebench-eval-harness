@@ -6,8 +6,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from financebench_eval_harness.embedding import EmbeddingClient
-from financebench_eval_harness.query_embedder import embed_question
-from financebench_eval_harness.retrieval_types import Chunk
 from financebench_eval_harness.vector_store import FaissVectorStore
 
 if TYPE_CHECKING:
@@ -101,43 +99,6 @@ class RetrievalRunResult:
     question_count: int
     output_path: Path
     metadata_path: Path | None = None
-
-
-def retrieve_for_questions(
-    questions: list[Question],
-    store: FaissVectorStore,
-    embedding_client: EmbeddingClient,
-    *,
-    top_k: int = 5,
-) -> list[RetrievalRow]:
-    """Embed each question and return the top-k nearest chunks from the store."""
-    if not questions:
-        return []
-
-    chunk_by_id: dict[str, Chunk] = {c.chunk_id: c for c in store.chunks}
-    rows: list[RetrievalRow] = []
-
-    for question in questions:
-        query_vec = embed_question(question.query, embedding_client)
-        results = store.search(query_vec, top_k=top_k)
-        retrieved = [
-            RetrievedChunk(
-                rank=r.rank,
-                chunk_id=r.chunk_id,
-                doc_name=chunk_by_id[r.chunk_id].doc_name,
-                page_num=chunk_by_id[r.chunk_id].page_num,
-                score=r.score,
-                text=chunk_by_id[r.chunk_id].text,
-            )
-            for r in results
-        ]
-        rows.append(RetrievalRow(
-            question_id=question.question_id,
-            query=question.query,
-            retrieved=retrieved,
-        ))
-
-    return rows
 
 
 def run_retrieval(

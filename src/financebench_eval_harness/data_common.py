@@ -101,3 +101,25 @@ def write_jsonl_records(path: Path, rows: list[dict]) -> None:
     with path.open("w", encoding="utf-8") as output_file:
         for row in rows:
             output_file.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def read_jsonl(path: Path) -> list[dict]:
+    """Read a JSONL file strictly: blank lines are skipped, bad JSON raises."""
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def read_jsonl_lenient(path: Path) -> list[dict]:
+    """Read a JSONL file leniently: a missing file is empty, undecodable lines are skipped."""
+    if not path.is_file():
+        return []
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            pass
+    return rows
